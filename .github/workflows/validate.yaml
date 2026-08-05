@@ -1,0 +1,38 @@
+name: Validate translations
+# Read-only CI check. Validates that all translation files are structurally
+# correct (valid JSON, no type mismatches, no keys absent from or extra compared
+# to en.json). Does NOT modify any files.
+# Run the cleanup-translations workflow to auto-fix issues and open a PR;
+# after that PR is merged this workflow will be green again.
+#
+# HACS and hassfest validation live in actions.yaml - this repository is a
+# single HACS repository of category "integration" now that the card ships
+# inside the component.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  language_validate:
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: "actions/checkout@v4"
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8.x'
+      - uses: actions/cache@v4
+        name: Load pip cache
+        with:
+          path: ~/.cache/pip
+          key: language-validate-pip-cache
+      - name: Install dependencies
+        run: |
+          python3 -m pip install colorama setuptools
+          python3 -m pip install pyicu
+      - name: Language validation
+        run: |
+          script -e -c "python3 .github/workflows/check.py"

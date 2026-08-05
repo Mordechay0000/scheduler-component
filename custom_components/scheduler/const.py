@@ -15,7 +15,9 @@ from homeassistant.const import (
     ATTR_NAME,
 )
 
-VERSION = "3.3.8"
+# Single version for the merged repository: the integration and the card it
+# serves are released together, so the card's version stream is continued here.
+VERSION = "4.0.19"
 
 DOMAIN = "scheduler"
 

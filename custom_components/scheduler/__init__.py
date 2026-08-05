@@ -28,6 +28,7 @@ from homeassistant.helpers.event import (
 )
 
 from . import const
+from .frontend import async_register_frontend, async_unregister_frontend
 from .store import async_get_registry
 from .websockets import async_register_websockets
 
@@ -64,6 +65,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     await hass.config_entries.async_forward_entry_setups(entry, [PLATFORM])
 
     await async_register_websockets(hass)
+
+    await async_register_frontend(hass)
 
     @callback
     def service_create_schedule(service):
@@ -203,6 +206,7 @@ async def async_unload_entry(hass, entry):
     )
     coordinator = hass.data[const.DOMAIN]["coordinator"]
     await coordinator.async_unload()
+    async_unregister_frontend(hass)
     return unload_ok
 
 

@@ -1,0 +1,288 @@
+{
+  "services": {
+    "generic": {
+      "turn_on": "Skru på",
+      "turn_off": "Slå av",
+      "parameter_to_value": "{parameter} til {value}",
+      "action_with_parameter": "{action} med {parameter}"
+    },
+    "climate": {
+      "set_temperature": "sett temperatur[ til {temperature}]",
+      "set_temperature_hvac_mode_heat": "oppvarming[ til {temperature}]",
+      "set_temperature_hvac_mode_cool": "kjøling[ til {temperature}]",
+      "set_temperature_hvac_mode_heat_cool": "oppvarming/kjøling[ til {temperature}]",
+      "set_temperature_hvac_mode_heat_cool_range": "oppvarming/kjøling[ til {target_temp_low} - {target_temp_high}]",
+      "set_temperature_hvac_mode_auto": "auto[ til {temperature}]",
+      "set_hvac_mode": "sett modus[ til {hvac_mode}]",
+      "set_preset_mode": "sett forhåndsvalg[ {preset_mode}]",
+      "set_fan_mode": "set fan mode[ to {fan_mode}]",
+      "set_swing_mode": "set swing mode[ to {swing_mode}]"
+    },
+    "cover": {
+      "close_cover": "lukk",
+      "open_cover": "åpne",
+      "set_cover_position": "sett posisjon[ til {position}]",
+      "set_cover_tilt_position": "sett vippestilling[ til {tilt_position}]"
+    },
+    "fan": {
+      "set_percentage": "sett hastighet[ til {speed}]",
+      "set_direction": "sett retning[ til {direction}]",
+      "oscillate": "sett svingning[ til {oscillate}]"
+    },
+    "humidifier": {
+      "set_humidity": "sett luftfuktighet[ til {humidity}]",
+      "set_mode": "sett modus[ til {mode}]"
+    },
+    "input_number": {
+      "set_value": "sett verdi[ til {value}]"
+    },
+    "input_select": {
+      "select_option": "velg[ {option}]"
+    },
+    "select": {
+      "select_option": "velg[ {option}]"
+    },
+    "light": {
+      "turn_on": "slå på[ med {brightness} lysstyrke]"
+    },
+    "media_player": {
+      "select_source": "velg kilde[ {source}]"
+    },
+    "notify": {
+      "send_message": "send notifikasjon"
+    },
+    "script": {
+      "execute": "utfør"
+    },
+    "vacuum": {
+      "start_pause": "start / pause"
+    },
+    "water_heater": {
+      "set_operation_mode": "sett modus[ til {operation_mode}]",
+      "set_away_mode": "sett bortemodus"
+    }
+  },
+  "ui": {
+    "components": {
+      "date": {
+        "day_types_short": {
+          "daily": "hver dag",
+          "workdays": "ukedager",
+          "weekend": "helg"
+        },
+        "day_types_long": {
+          "daily": "hver dag",
+          "workdays": "ukedager",
+          "weekend": "helg"
+        },
+        "days": "Dager",
+        "tomorrow": "imorgen",
+        "repeated_days": "hver {days}",
+        "repeated_days_except": "hver dag unntatt {excludedDays}",
+        "days_range": "fra {startDay} til {endDay}",
+        "next_week_day": "neste {weekday}"
+      },
+      "time": {
+        "absolute": "kl. {time}",
+        "interval": "fra {startTime} til {endTime}",
+        "at_midnight": "ved midnatt",
+        "at_noon": "kl. 12.00",
+        "at_sun_event": "ved {sunEvent}"
+      }
+    },
+    "dialog": {
+      "enable_schedule": {
+        "title": "Fullfør endringene",
+        "description": "Tidsplanen som er endret er for øyeblikket deaktivert, bør den være aktivert?"
+      },
+      "confirm_delete": {
+        "title": "Vil du fjerne entiteten?",
+        "description": "Er du sikker på at du vil fjerne denne entiteten?"
+      },
+      "confirm_migrate": {
+        "title": "Endre tidsplanen",
+        "description": "Noen innstillinger vil gå tapt ved denne handlingen. Vil du fortsette?"
+      },
+      "weekday_picker": {
+        "title": "Repeated days for schedule",
+        "choose": "Choose..."
+      },
+      "entity_picker": {
+        "title": "Choose entities",
+        "choose": "Choose...",
+        "no_results": "No matching items found"
+      },
+      "action_picker": {
+        "title": "Choose action",
+        "show_all": "Show all supported entities"
+      }
+    },
+    "panel": {
+      "common": {
+        "title": "Tidsplan",
+        "new_schedule": "Ny tidsplan",
+        "default_name": "Tidsplan #{id}"
+      },
+      "overview": {
+        "no_entries": "Det er ingen definerte tidsplaner å vise",
+        "backend_error": "Kunne ikke koble til tidsplankomponenten. Den må installeres som en integrasjon før dette kortet kan benyttes.",
+        "excluded_items": "{number} ekskludert {if number is 1} element {else} elementer",
+        "hide_excluded": "skjul ekskluderte elementer",
+        "additional_tasks": "{number} flere {if number is 1} oppgaver {else} oppgaver",
+        "overview_view": "Show timeline overview",
+        "list_view": "Show list view",
+        "tap_icon_to_toggle": "Tap to turn on/off",
+        "saved": "Saved",
+        "undo": "Undo",
+        "add_schedule": "Add schedule",
+        "turn_on": "On",
+        "turn_off": "Off",
+        "brightness": "Brightness",
+        "color_temp": "Color temp",
+        "color": "Color",
+        "reset_hint": "Undo all changes made since the card was opened",
+        "today": "Today",
+        "two_days": "2 days",
+        "duplicate": "Duplicate schedule"
+      },
+      "editor": {
+        "repeated_days": "Repeated days",
+        "start_time": "Start time",
+        "stop_time": "End time",
+        "action": "Action",
+        "add_action": "Add action",
+        "select_timeslot": "Velg tidsluke",
+        "toggle_single_mode": "Til enkel modus",
+        "toggle_scheme_mode": "Til skjemamodus",
+        "validation_errors": {
+          "overlapping_time": "Schedule has overlapping timeslots",
+          "missing_target_entity": "One or more actions are missing a target entity",
+          "missing_service_parameter": "One or more actions are missing a required setting",
+          "missing_action": "Schedule has no actions"
+        }
+      },
+      "options": {
+        "conditions": {
+          "header": "Conditions",
+          "add_condition": "Add condition",
+          "new_condition": "New condition",
+          "types": {
+            "equal_to": "{entity} is equal to {value}",
+            "unequal_to": "{entity} is unequal to {value}",
+            "above": "{entity} is above {value}",
+            "below": "{entity} is below {value}"
+          },
+          "options": {
+            "logic_and": "All conditions must be true",
+            "logic_or": "Any condition must be true",
+            "track_changes": "Re-evaluate when conditions change"
+          }
+        },
+        "period": {
+          "header": "Periode",
+          "start_date": "From",
+          "end_date": "To"
+        },
+        "repeat_type": "oppførsel etter fullføring",
+        "tags": "Tags"
+      },
+      "card_editor": {
+        "tabs": {
+          "entities": "Entities",
+          "other": "Other"
+        },
+        "fields": {
+          "title": {
+            "heading": "Title of the card",
+            "options": {
+              "standard": "standard",
+              "hidden": "hidden",
+              "custom": "custom"
+            },
+            "custom_title": "Custom title"
+          },
+          "discover_existing": {
+            "heading": "Show all schedules",
+            "description": "This sets the 'discover existing' parameter. Previously created schedules will be automatically added to the card. "
+          },
+          "time_step": {
+            "heading": "Time step",
+            "description": "Resolution (in minutes) for creating schedules",
+            "unit_minutes": "min"
+          },
+          "default_editor": {
+            "heading": "Default time editor",
+            "options": {
+              "single": "Single schedule mode",
+              "scheme": "Time scheme mode"
+            }
+          },
+          "sort_by": {
+            "heading": "Sorting options",
+            "description": "Order in which the schedules appear in the card",
+            "options": {
+              "relative_time": "Time remaining until next action",
+              "title": "Displayed title of the schedule",
+              "state": "Show active schedules on top"
+            }
+          },
+          "display_format_primary": {
+            "heading": "Displayed primary info",
+            "description": "Configure which label is used for schedules in the overview",
+            "options": {
+              "default": "Schedule name",
+              "entity_action": "Summary of task"
+            }
+          },
+          "display_format_secondary": {
+            "heading": "Displayed secondary info",
+            "description": "Configure what additional properties are visible in the overview",
+            "options": {
+              "relative_time": "Time remaining until next action",
+              "time": "Configured time for next action",
+              "days": "Repeated days of the week",
+              "additional_tasks": "Number of additional tasks"
+            }
+          },
+          "show_header_toggle": {
+            "heading": "Show header toggle",
+            "description": "Show toggle switch at the top of the card for enabling/disabling all entities"
+          },
+          "show_toggle_switches": {
+            "heading": "Show toggle switches",
+            "description": "Show toggle switch for each individual schedule in the card"
+          },
+          "tags": {
+            "heading": "Tags",
+            "description": "Use tags to divide schedules between multiple cards"
+          },
+          "entities": {
+            "button_label": "Configure included entities",
+            "heading": "Included entities",
+            "description": "Select the entities that you want to control using the scheduler. You can click on a group to open it. Note that some entities (such as sensors) can only be used for conditions, not for actions.",
+            "included_number": "{number}/{total} selected"
+          },
+          "default_view": {
+            "heading": "Default view",
+            "options": {
+              "overview": "Timeline overview",
+              "list": "List"
+            }
+          },
+          "show_view_toggle": {
+            "heading": "Show view switcher"
+          },
+          "show_clock": {
+            "heading": "Show clock in header"
+          },
+          "overview_editing": {
+            "heading": "Edit from the timeline"
+          },
+          "show_quick_add": {
+            "heading": "Quick add row"
+          }
+        }
+      }
+    }
+  }
+}

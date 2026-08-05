@@ -1,0 +1,288 @@
+{
+  "services": {
+    "generic": {
+      "turn_on": "打开",
+      "turn_off": "关闭",
+      "parameter_to_value": "{parameter} 至 {value}",
+      "action_with_parameter": "{action} 使用 {parameter}"
+    },
+    "climate": {
+      "set_temperature": "设定温度[ 至 {temperature}]",
+      "set_temperature_hvac_mode_heat": "制热模式[ 至 {temperature}]",
+      "set_temperature_hvac_mode_cool": "制冷模式[ 至 {temperature}]",
+      "set_temperature_hvac_mode_heat_cool": "制热模式/制冷模式[ 至 {temperature}]",
+      "set_temperature_hvac_mode_heat_cool_range": "制热模式/制冷模式[ 至 {target_temp_low} - {target_temp_high}]",
+      "set_temperature_hvac_mode_auto": "自动[ 至 {temperature}]",
+      "set_hvac_mode": "设定模式[ 为 {hvac_mode}]",
+      "set_preset_mode": "设定预设模式[ 为 {preset_mode}]",
+      "set_fan_mode": "设置风扇模式[ 为 {fan_mode}]",
+      "set_swing_mode": "设置摆动模式[ 为 {swing_mode}]"
+    },
+    "cover": {
+      "close_cover": "关闭",
+      "open_cover": "打开",
+      "set_cover_position": "设置位置[ 为 {position}]",
+      "set_cover_tilt_position": "设置倾斜位置[ 为 {tilt_position}]"
+    },
+    "fan": {
+      "set_percentage": "设定风速[ 为 {speed}]",
+      "set_direction": "设定方向[ 为 {direction}]",
+      "oscillate": "设置摇摆[ 为 {oscillate}]"
+    },
+    "humidifier": {
+      "set_humidity": "设定湿度[ 至 {humidity}]",
+      "set_mode": "设定模式[ 为 {mode}]"
+    },
+    "input_number": {
+      "set_value": "设定数值[ 至 {value}]"
+    },
+    "input_select": {
+      "select_option": "选择选项[ {option}]"
+    },
+    "select": {
+      "select_option": "选择选项[ {option}]"
+    },
+    "light": {
+      "turn_on": "打开[ 并设定亮度为 {brightness}]"
+    },
+    "media_player": {
+      "select_source": "选择播放源[ {source}]"
+    },
+    "notify": {
+      "send_message": "发送通知"
+    },
+    "script": {
+      "execute": "执行"
+    },
+    "vacuum": {
+      "start_pause": "开始 / 暂停"
+    },
+    "water_heater": {
+      "set_operation_mode": "设定模式[ 为 {operation_mode}]",
+      "set_away_mode": "设定离开模式"
+    }
+  },
+  "ui": {
+    "components": {
+      "date": {
+        "day_types_short": {
+          "daily": "每天",
+          "workdays": "工作日",
+          "weekend": "周末"
+        },
+        "day_types_long": {
+          "daily": "每天",
+          "workdays": "工作日",
+          "weekend": "周末"
+        },
+        "days": "天",
+        "tomorrow": "明天",
+        "repeated_days": "每 {days}",
+        "repeated_days_except": "每天，除了 {excludedDays}",
+        "days_range": "从 {startDay} 至 {endDay}",
+        "next_week_day": "下{weekday}"
+      },
+      "time": {
+        "absolute": "{time}",
+        "interval": "从 {startTime} 至 {endTime}",
+        "at_midnight": "午夜",
+        "at_noon": "中午",
+        "at_sun_event": "{sunEvent}"
+      }
+    },
+    "dialog": {
+      "enable_schedule": {
+        "title": "完成修改",
+        "description": "您修改的计划任务当前已禁用，是否需要启用？"
+      },
+      "confirm_delete": {
+        "title": "是否删除实体？",
+        "description": "您确定要删除此实体吗？"
+      },
+      "confirm_migrate": {
+        "title": "修改任务",
+        "description": "此操作将丢失某些设置。 你想继续吗？"
+      },
+      "weekday_picker": {
+        "title": "重复周期",
+        "choose": "选择..."
+      },
+      "entity_picker": {
+        "title": "选择实体",
+        "choose": "选择...",
+        "no_results": "未找到匹配项"
+      },
+      "action_picker": {
+        "title": "选择动作",
+        "show_all": "显示所有受支持的实体"
+      }
+    },
+    "panel": {
+      "common": {
+        "title": "计划任务",
+        "new_schedule": "新建任务",
+        "default_name": "任务 #{id}"
+      },
+      "overview": {
+        "no_entries": "无事项",
+        "backend_error": "计划任务组件关联失败。使用本卡片前，需先安装计划任务组件（Scheduler component）集成.",
+        "excluded_items": "其他{number}项{if number is 1}任务{else}任务",
+        "hide_excluded": "隐藏其他任务",
+        "additional_tasks": "另有{number}项{if number is 1}任务{else}任务",
+        "overview_view": "Show timeline overview",
+        "list_view": "Show list view",
+        "tap_icon_to_toggle": "Tap to turn on/off",
+        "saved": "Saved",
+        "undo": "Undo",
+        "add_schedule": "Add schedule",
+        "turn_on": "On",
+        "turn_off": "Off",
+        "brightness": "Brightness",
+        "color_temp": "Color temp",
+        "color": "Color",
+        "reset_hint": "Undo all changes made since the card was opened",
+        "today": "Today",
+        "two_days": "2 days",
+        "duplicate": "Duplicate schedule"
+      },
+      "editor": {
+        "repeated_days": "重复周期",
+        "start_time": "开始时间",
+        "stop_time": "结束时间",
+        "action": "动作",
+        "add_action": "添加动作",
+        "select_timeslot": "选择时间段",
+        "toggle_single_mode": "切换为单次模式",
+        "toggle_scheme_mode": "切换为方案模式",
+        "validation_errors": {
+          "overlapping_time": "计划任务存在重叠的时间段",
+          "missing_target_entity": "一个或多个动作缺少目标实体",
+          "missing_service_parameter": "一个或多个操作缺少必要设置",
+          "missing_action": "计划任务未设置任何动作"
+        }
+      },
+      "options": {
+        "conditions": {
+          "header": "条件",
+          "add_condition": "添加条件",
+          "new_condition": "新建条件",
+          "types": {
+            "equal_to": "{entity} 等于 {value}",
+            "unequal_to": "{entity} 不等于 {value}",
+            "above": "{entity} 大于 {value}",
+            "below": "{entity} 小于 {value}"
+          },
+          "options": {
+            "logic_and": "所有条件必须同时满足（AND）",
+            "logic_or": "任意一个条件满足（OR）",
+            "track_changes": "当条件变化时重新判断"
+          }
+        },
+        "period": {
+          "header": "生效时段",
+          "start_date": "从",
+          "end_date": "到"
+        },
+        "repeat_type": "任务完成后的行为",
+        "tags": "标签"
+      },
+      "card_editor": {
+        "tabs": {
+          "entities": "实体",
+          "other": "其他"
+        },
+        "fields": {
+          "title": {
+            "heading": "卡片标题",
+            "options": {
+              "standard": "标准",
+              "hidden": "隐藏",
+              "custom": "自定义"
+            },
+            "custom_title": "自定义标题"
+          },
+          "discover_existing": {
+            "heading": "显示所有计划任务",
+            "description": "这将设置‘发现已有任务(discover existing)’参数。已创建的任务会自动添加到卡片中。 "
+          },
+          "time_step": {
+            "heading": "时间调整步长",
+            "description": "创建计划任务时，时间选择器每次点击增加或减少的分钟数",
+            "unit_minutes": "分钟"
+          },
+          "default_editor": {
+            "heading": "新建任务默认模式",
+            "options": {
+              "single": "单次任务模式",
+              "scheme": "时间方案模式"
+            }
+          },
+          "sort_by": {
+            "heading": "排序方式",
+            "description": "计划任务在卡片中的显示顺序",
+            "options": {
+              "relative_time": "按距离下次执行时间排序",
+              "title": "按任务标题排序",
+              "state": "优先显示已启用的任务"
+            }
+          },
+          "display_format_primary": {
+            "heading": "显示的主要信息",
+            "description": "设置卡片中显示任务的主要信息",
+            "options": {
+              "default": "任务名称",
+              "entity_action": "任务概要"
+            }
+          },
+          "display_format_secondary": {
+            "heading": "显示的次要信息",
+            "description": "设置卡片中显示任务的次要信息",
+            "options": {
+              "relative_time": "下次执行的剩余时间",
+              "time": "下次执行的设定时间",
+              "days": "重复周期（星期）",
+              "additional_tasks": "额外任务数量"
+            }
+          },
+          "show_header_toggle": {
+            "heading": "显示标题开关",
+            "description": "在卡片顶部显示切换开关，用于启用/禁用所有实体"
+          },
+          "show_toggle_switches": {
+            "heading": "显示切换开关",
+            "description": "为卡片中的每个单独计划显示切换开关"
+          },
+          "tags": {
+            "heading": "标签",
+            "description": "使用标签可将不同的计划任务分配到多个卡片中"
+          },
+          "entities": {
+            "button_label": "配置包含的实体（配置后未选择的实体相关任务将会隐藏）",
+            "heading": "包含的实体",
+            "description": "选择您希望通过计划任务控制的实体。您可以点击一个分组将其展开。请注意，部分实体（例如传感器）只能用作触发条件，而不能作为执行动作。",
+            "included_number": "已选择 {number}/{total}"
+          },
+          "default_view": {
+            "heading": "Default view",
+            "options": {
+              "overview": "Timeline overview",
+              "list": "List"
+            }
+          },
+          "show_view_toggle": {
+            "heading": "Show view switcher"
+          },
+          "show_clock": {
+            "heading": "Show clock in header"
+          },
+          "overview_editing": {
+            "heading": "Edit from the timeline"
+          },
+          "show_quick_add": {
+            "heading": "Quick add row"
+          }
+        }
+      }
+    }
+  }
+}
