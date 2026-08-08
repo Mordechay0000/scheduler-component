@@ -7,6 +7,8 @@ from homeassistant.const import (
     WEEKDAYS,
     STATE_ON,
     STATE_OFF,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import (
     HomeAssistant,
@@ -34,6 +36,37 @@ ATTR_WORKDAYS = "workdays"
 
 def has_sun(time_str: str):
     return const.OffsetTimePattern.match(time_str)
+
+
+def has_entity_anchor(time_str: str):
+    """match a time that is anchored to an entity, e.g. sensor.shkia-00:18:00"""
+    return const.EntityOffsetTimePattern.match(time_str)
+
+
+def parse_anchor(time_str: str):
+    """split an anchored time into (anchor, sign, offset), or None if fixed.
+
+    The anchor is either a sun event keyword or the entity id that publishes
+    the time. Both forms resolve to a moment that is only known at trigger
+    time, which is what separates them from a plain clock time.
+    """
+    if time_str is None:
+        return None
+    res = has_sun(time_str) or has_entity_anchor(time_str)
+    if not res:
+        return None
+    return (res.group(1), res.group(2), res.group(3))
+
+
+def anchor_entity(time_str: str):
+    """the entity whose changes should re-arm a timer using this time"""
+    parsed = parse_anchor(time_str)
+    if parsed is None:
+        return None
+    anchor = parsed[0]
+    if anchor in [const.SUN_EVENT_SUNRISE, const.SUN_EVENT_SUNSET]:
+        return const.SUN_ENTITY
+    return anchor
 
 
 def is_same_day(dateA: datetime.datetime, dateB: datetime.datetime):
@@ -74,7 +107,8 @@ class TimerHandler:
         self._timer = None
         self._next_trigger = None
         self._next_slot = None
-        self._sun_tracker = None
+        self._anchor_tracker = None
+        self._tracked_anchors = []
         self._workday_tracker = None
         self._watched_times = []
 
@@ -136,7 +170,7 @@ class TimerHandler:
         self.current_slot = current_slot
         self._next_trigger = timestamp
 
-        await self.async_start_sun_tracker()
+        await self.async_start_anchor_tracker()
         now = dt_util.as_local(dt_util.utcnow())
 
         if timestamp is not None:
@@ -164,38 +198,49 @@ class TimerHandler:
         if self._timer:
             self._timer()
             self._timer = None
-        await self.async_stop_sun_tracker()
+        await self.async_stop_anchor_tracker()
         await self.async_stop_workday_tracker()
 
-    async def async_start_sun_tracker(self):
-        """check for changes in the sun sensor"""
-        if (
-            self._next_trigger is not None
-            and any(has_sun(x) for x in self._watched_times)
-        ) or (
-            self._next_trigger is None
-            and all(has_sun(x[const.ATTR_START]) for x in self._timeslots)
-        ):
-            # install sun tracker for updating timer when sun changes
-            # initially the time calculation may fail due to the sun entity being unavailable
+    def anchor_entities(self):
+        """the entities the current timer depends on for its trigger time"""
+        if self._next_trigger is not None:
+            times = self._watched_times
+        else:
+            # nothing is armed yet - watch every anchor so an entity that is
+            # still initializing can start the timer once it publishes a value
+            times = [x[const.ATTR_START] for x in self._timeslots]
+            if not times or not all(parse_anchor(x) for x in times):
+                return []
+        entities = [anchor_entity(x) for x in times]
+        return sorted({e for e in entities if e is not None})
 
-            if self._sun_tracker is not None:
-                # the tracker is already running
-                return
+    async def async_start_anchor_tracker(self):
+        """check for changes in the entities the trigger time is derived from"""
+        entities = self.anchor_entities()
+        if entities:
+            # install tracker for updating the timer when an anchor moves.
+            # initially the time calculation may fail because the anchor entity
+            # is not available yet.
+
+            if self._anchor_tracker is not None:
+                if self._tracked_anchors == entities:
+                    # the tracker is already running for these entities
+                    return
+                # the schedule now depends on a different set of anchors
+                await self.async_stop_anchor_tracker()
 
             @callback
-            async def async_sun_updated(_event):
-                """the sun entity was updated"""
-                # sun entity changed
+            async def async_anchor_updated(_event):
+                """an anchor entity was updated"""
                 if self._next_trigger is None:
-                    # sun entity has initialized
+                    # anchor entity has initialized
                     await self.async_start_timer()
                     return
                 ts = find_closest_from_now(
                     self.calculate_timestamp(x) for x in self._watched_times
                 )
                 if not ts or not self._next_trigger:
-                    # sun entity became unavailable (or other corner case)
+                    # anchor entity became unavailable (or other corner case)
                     await self.async_start_timer()
                     return
                 # we are re-scheduling an existing timer
@@ -206,18 +251,20 @@ class TimerHandler:
                     # only reschedule if this doesnt cause the timer to shift to another hour (due to DST change)
                     await self.async_start_timer()
 
-            self._sun_tracker = async_track_state_change_event(
-                self.hass, const.SUN_ENTITY, async_sun_updated
+            self._tracked_anchors = entities
+            self._anchor_tracker = async_track_state_change_event(
+                self.hass, entities, async_anchor_updated
             )
         else:
             # clear existing tracker
-            await self.async_stop_sun_tracker()
+            await self.async_stop_anchor_tracker()
 
-    async def async_stop_sun_tracker(self):
-        """stop checking for changes in the sun sensor"""
-        if self._sun_tracker:
-            self._sun_tracker()
-            self._sun_tracker = None
+    async def async_stop_anchor_tracker(self):
+        """stop checking for changes in the anchor entities"""
+        if self._anchor_tracker:
+            self._anchor_tracker()
+            self._anchor_tracker = None
+        self._tracked_anchors = []
 
     async def async_start_workday_tracker(self):
         """check for changes in the workday sensor"""
@@ -327,48 +374,35 @@ class TimerHandler:
         if now is None:
             now = dt_util.as_local(dt_util.utcnow())
 
-        res = has_sun(time_str)
-        if not res:
+        parsed = parse_anchor(time_str)
+        if parsed is None:
             # fixed time
             time = dt_util.parse_time(time_str)
             ts = dt_util.find_next_time_expression_time(
                 now, [time.second], [time.minute], [time.hour]
             )
         else:
-            # relative to sunrise/sunset
-            sun = self.hass.states.get(const.SUN_ENTITY)
-            if not sun:
-                return None
-            ts = None
-            if (
-                res.group(1) == const.SUN_EVENT_SUNRISE
-                and ATTR_NEXT_RISING in sun.attributes
-            ):
-                ts = dt_util.parse_datetime(sun.attributes[ATTR_NEXT_RISING])
-            elif (
-                res.group(1) == const.SUN_EVENT_SUNSET
-                and ATTR_NEXT_SETTING in sun.attributes
-            ):
-                ts = dt_util.parse_datetime(sun.attributes[ATTR_NEXT_SETTING])
+            # relative to an anchor (sunrise/sunset, or an entity publishing a time)
+            (anchor, sign, offset_str) = parsed
+            ts = self.resolve_anchor(anchor, now)
             if not ts:
                 return None
-            ts = dt_util.as_local(ts)
             ts = ts.replace(second=0)
-            time_sun = datetime.timedelta(
+            time_anchor = datetime.timedelta(
                 hours=ts.hour, minutes=ts.minute, seconds=ts.second
             )
-            offset = dt_util.parse_time(res.group(3))
+            offset = dt_util.parse_time(offset_str)
             offset = datetime.timedelta(
                 hours=offset.hour, minutes=offset.minute, seconds=offset.second
             )
-            if res.group(2) == "-":
-                if (time_sun - offset).total_seconds() >= 0:
+            if sign == "-":
+                if (time_anchor - offset).total_seconds() >= 0:
                     ts = ts - offset
                 else:
                     # prevent offset to shift the time past the extends of the day
                     ts = ts.replace(hour=0, minute=0, second=0)
             else:
-                if (time_sun + offset).total_seconds() <= 86340:
+                if (time_anchor + offset).total_seconds() <= 86340:
                     ts = ts + offset
                 else:
                     # prevent offset to shift the time past the extends of the day
@@ -415,6 +449,59 @@ class TimerHandler:
         return self.calculate_timestamp(
             time_str, next_day, iteration + 1, reverse_direction
         )
+
+    def resolve_anchor(
+        self, anchor: str, now: datetime.datetime
+    ) -> datetime.datetime:
+        """resolve an anchor to a local datetime, or None if it is unavailable.
+
+        Only the time-of-day of the result is used by the caller, which is why
+        an entity that publishes a plain "HH:MM" is as good as one publishing a
+        full timestamp.
+        """
+        if anchor in [const.SUN_EVENT_SUNRISE, const.SUN_EVENT_SUNSET]:
+            sun = self.hass.states.get(const.SUN_ENTITY)
+            if not sun:
+                return None
+            attribute = (
+                ATTR_NEXT_RISING
+                if anchor == const.SUN_EVENT_SUNRISE
+                else ATTR_NEXT_SETTING
+            )
+            if attribute not in sun.attributes:
+                return None
+            ts = dt_util.parse_datetime(sun.attributes[attribute])
+            return dt_util.as_local(ts) if ts else None
+
+        state = self.hass.states.get(anchor)
+        if not state or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            _LOGGER.debug(
+                "Anchor entity {} of schedule {} is not available".format(
+                    anchor, self.id
+                )
+            )
+            return None
+
+        # timestamp sensors (device_class: timestamp) publish an ISO datetime
+        ts = dt_util.parse_datetime(state.state)
+        if ts is not None:
+            return dt_util.as_local(ts)
+
+        # template sensors commonly publish a bare time instead
+        time = dt_util.parse_time(state.state)
+        if time is not None:
+            return now.replace(
+                hour=time.hour,
+                minute=time.minute,
+                second=time.second,
+                microsecond=0,
+            )
+
+        _LOGGER.warning(
+            "Anchor entity {} of schedule {} has state '{}', which is neither a "
+            "timestamp nor a time".format(anchor, self.id, state.state)
+        )
+        return None
 
     def next_timeslot(self):
         """calculate the closest timeslot from now"""

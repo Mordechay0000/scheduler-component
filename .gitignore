@@ -9,3 +9,6 @@ dist/
 .history
 __pycache__/
 report
+.venv-test/
+.pytest_cache/
+logs/

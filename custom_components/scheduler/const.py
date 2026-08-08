@@ -58,6 +58,10 @@ SERVICE_ENABLE_ALL = "enable_all"
 SERVICE_RELOAD_STORAGE = "reload_storage"
 
 OffsetTimePattern = re.compile(r"^([a-z]+)([-|\+]{1})([0-9:]+)$")
+# An anchor may also be an entity that publishes a time, e.g.
+# "sensor.jewish_calendar_shkia-00:18:00". Entity ids always contain a dot, so
+# this pattern and OffsetTimePattern can never match the same string.
+EntityOffsetTimePattern = re.compile(r"^([a-z_]+\.[a-z0-9_]+)([-|\+]{1})([0-9:]+)$")
 DatePattern = re.compile(r"^[0-9]+\-[0-9]+\-[0-9]+$")
 
 ATTR_START = "start"
@@ -88,12 +92,7 @@ STATE_COMPLETED = "completed"
 
 def validate_time(time):
     res = OffsetTimePattern.match(time)
-    if not res:
-        if dt_util.parse_time(time):
-            return time
-        else:
-            raise vol.Invalid("Invalid time entered: {}".format(time))
-    else:
+    if res:
         if res.group(1) not in [SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET]:
             raise vol.Invalid("Invalid time entered: {}".format(time))
         elif res.group(2) not in ["+", "-"]:
@@ -102,6 +101,22 @@ def validate_time(time):
             raise vol.Invalid("Invalid time entered: {}".format(time))
         else:
             return time
+
+    res = EntityOffsetTimePattern.match(time)
+    if res:
+        # anchored to an entity that publishes a time - the value is read at
+        # trigger time, so nothing about it can be validated here beyond shape
+        try:
+            cv.entity_id(res.group(1))
+        except vol.Invalid:
+            raise vol.Invalid("Invalid time entered: {}".format(time))
+        if not dt_util.parse_time(res.group(3)):
+            raise vol.Invalid("Invalid time entered: {}".format(time))
+        return time
+
+    if dt_util.parse_time(time):
+        return time
+    raise vol.Invalid("Invalid time entered: {}".format(time))
 
 
 def validate_date(value: str) -> str:
