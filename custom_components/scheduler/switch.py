@@ -120,6 +120,10 @@ class ScheduleEntity(ToggleEntity):
         self._timestamps = []
         self._next_entries = []
         self._current_slot = None
+        # the slot each track is in, and what was last applied for it, so that
+        # a track is only re-run when its slot or its ownership actually moved
+        self._current_slots = {}
+        self._applied = {}
         self._init = True
         self._tags = []
 
@@ -157,6 +161,7 @@ class ScheduleEntity(ToggleEntity):
             self._state = STATE_OFF
 
         self._init = True  # trigger actions of starting timeslot
+        self._applied = {}  # the config changed, so nothing counts as applied
 
         if self.hass is None:
             return
@@ -171,25 +176,19 @@ class ScheduleEntity(ToggleEntity):
             return
 
         self._next_entries = self._timer_handler.slot_queue
-        self._timestamps = list(
-            map(
-                lambda x: datetime.datetime.isoformat(x), self._timer_handler.timestamps
-            )
-        )
-        if self._current_slot is not None and self._timer_handler.current_slot is None:
-            # we are leaving a timeslot, stop execution of actions
-            if (
-                len(self.schedule[const.ATTR_TIMESLOTS]) == 1
-                and self.schedule[const.ATTR_REPEAT_TYPE] == const.REPEAT_TYPE_REPEAT
-            ):
-                # allow unavailable entities to restore within 9 mins (+1 minute of triggered duration)
-                await self._action_handler.async_empty_queue(restore_time=9)
-            else:
-                await self._action_handler.async_empty_queue()
+        self._timestamps = [
+            datetime.datetime.isoformat(x) if x is not None else None
+            for x in self._timer_handler.timestamps
+        ]
 
-            if self._current_slot == (
-                len(self.schedule[const.ATTR_TIMESLOTS]) - 1
-            ) and (
+        previous_slots = dict(self._current_slots)
+        self._current_slots = dict(self._timer_handler.current_slots)
+        self._current_slot = self._timer_handler.current_slot
+        released = await self.async_release_tracks(previous_slots)
+
+        if released and not any(x is not None for x in self._current_slots.values()):
+            last_slot = len(self.schedule[const.ATTR_TIMESLOTS]) - 1
+            if any(slot == last_slot for (_track, slot) in released) and (
                 not self.schedule[const.ATTR_END_DATE]
                 or not date_in_future(self.schedule[const.ATTR_END_DATE])
             ):
@@ -213,8 +212,6 @@ class ScheduleEntity(ToggleEntity):
                     )
                     self.coordinator.async_delete_schedule(self.schedule_id)
 
-        self._current_slot = self._timer_handler.current_slot
-
         if self._state not in [STATE_OFF, AlarmControlPanelState.TRIGGERED]:
             if len(self._next_entries) < 1:
                 self._state = STATE_UNAVAILABLE
@@ -227,43 +224,123 @@ class ScheduleEntity(ToggleEntity):
                         STATE_ON if self.schedule[const.ATTR_ENABLED] else STATE_OFF
                     )
 
-        if self._init:
-            # initial startpoint for timer calculated, fire actions if currently overlapping with timeslot
-            if self._current_slot is not None and self._state != STATE_OFF:
-                skip_initial_execution = False
-                if self.coordinator.state == const.STATE_INIT and self.coordinator.time_shutdown:
-                    # if the date+time of prior shutdown is known, determine which timeslots are already triggered before
-                    # calculate the next start of timeslot since the time of shutdown, execute only if this is in the past
-                    ts_shutdown = self.coordinator.time_shutdown
-                    now = dt_util.as_local(dt_util.utcnow())
-                    start_time = self.schedule[const.ATTR_TIMESLOTS][self._current_slot][const.ATTR_START]
-                    start_of_timeslot = self._timer_handler.calculate_timestamp(start_time, ts_shutdown)
-                    if start_of_timeslot > now:
-                        skip_initial_execution = True
-
-                if skip_initial_execution:
-                    _LOGGER.debug(
-                        "Schedule {} was already executed before shutdown, initial timeslot is skipped.".format(
-                            self.schedule_id
-                        )
-                    )
-                else:
-                    _LOGGER.debug(
-                        "Schedule {} is starting in a timeslot, proceed with actions".format(
-                            self.schedule_id
-                        )
-                    )
-                await self._action_handler.async_queue_actions(
-                    self.schedule[const.ATTR_TIMESLOTS][self._current_slot],
-                    skip_initial_execution
-                )
-            self._init = False
+        # initial startpoint for timer calculated, fire actions if currently
+        # overlapping with a timeslot. Afterwards this is a no-op unless a
+        # track moved or another track took (or gave back) one of its entities.
+        await self.async_sync_tracks(initial=self._init)
+        self._init = False
 
         if self.hass is None:
             return
 
         self.async_write_ha_state()
         self.hass.bus.async_fire(const.EVENT)
+
+    async def async_release_tracks(self, previous_slots: dict):
+        """stop the actions of every track that just left its timeslot"""
+        released = [
+            (track, slot)
+            for (track, slot) in previous_slots.items()
+            if slot is not None and self._current_slots.get(track) is None
+        ]
+        for (track, _slot) in released:
+            if (
+                len(self.schedule[const.ATTR_TIMESLOTS]) == 1
+                and self.schedule[const.ATTR_REPEAT_TYPE] == const.REPEAT_TYPE_REPEAT
+            ):
+                # allow unavailable entities to restore within 9 mins (+1 minute of triggered duration)
+                await self._action_handler.async_empty_queue(
+                    track=track, restore_time=9
+                )
+            else:
+                await self._action_handler.async_empty_queue(track=track)
+        return released
+
+    def async_owned_entities(self, track: str, current_slots: dict = None):
+        """the entities a stronger track is holding right now
+
+        A device belongs to its group by default. While it is detached the
+        detaching track owns it, and the group must leave it alone - including
+        after a restart, when the group would otherwise re-apply its own state
+        over the detached one.
+        """
+        if current_slots is None:
+            current_slots = self._current_slots
+        timeslots = self.schedule[const.ATTR_TIMESLOTS]
+
+        slot = current_slots.get(track)
+        own_priority = (
+            timeslots[slot][const.ATTR_PRIORITY]
+            if slot is not None
+            else const.DEFAULT_PRIORITY
+        )
+
+        owned = set()
+        for (other, index) in current_slots.items():
+            if other == track or index is None:
+                continue
+            if timeslots[index][const.ATTR_PRIORITY] <= own_priority:
+                continue
+            for action in timeslots[index][const.ATTR_ACTIONS]:
+                if action[ATTR_ENTITY_ID]:
+                    owned.add(action[ATTR_ENTITY_ID])
+        return owned
+
+    def slot_already_executed(self, slot: int):
+        """did this slot already start before the last shutdown?"""
+        if (
+            self.coordinator.state != const.STATE_INIT
+            or not self.coordinator.time_shutdown
+        ):
+            return False
+        # calculate the next start of timeslot since the time of shutdown,
+        # execute only if this is in the past
+        start_time = self.schedule[const.ATTR_TIMESLOTS][slot][const.ATTR_START]
+        start_of_timeslot = self._timer_handler.calculate_timestamp(
+            start_time,
+            self.coordinator.time_shutdown,
+            dates=self._timer_handler.slot_dates(slot),
+        )
+        if start_of_timeslot is None:
+            return False
+        return start_of_timeslot > dt_util.as_local(dt_util.utcnow())
+
+    async def async_sync_tracks(self, initial: bool = False):
+        """apply the timeslot every track is currently in"""
+        if self._state == STATE_OFF:
+            return
+
+        timeslots = self.schedule[const.ATTR_TIMESLOTS]
+        for (track, slot) in self._current_slots.items():
+            if slot is None:
+                self._applied.pop(track, None)
+                continue
+
+            excluded = frozenset(self.async_owned_entities(track))
+            if self._applied.get(track) == (slot, excluded):
+                # this track is already running exactly this
+                continue
+            self._applied[track] = (slot, excluded)
+
+            skip = self.slot_already_executed(slot) if initial else False
+            if skip:
+                _LOGGER.debug(
+                    "Schedule {} was already executed before shutdown, initial timeslot is skipped.".format(
+                        self.schedule_id
+                    )
+                )
+            else:
+                _LOGGER.debug(
+                    "Schedule {} is proceeding with the actions of slot {} on track '{}'".format(
+                        self.schedule_id, slot, track
+                    )
+                )
+            await self._action_handler.async_queue_actions(
+                timeslots[slot],
+                skip,
+                track=track,
+                exclude_entities=excluded,
+            )
 
     @callback
     async def async_timer_finished(self, id: str):
@@ -273,16 +350,17 @@ class ScheduleEntity(ToggleEntity):
 
         if self._state not in [STATE_OFF, const.STATE_COMPLETED]:
 
+            previous_slots = dict(self._current_slots)
+            self._current_slots = dict(self._timer_handler.current_slots)
             self._current_slot = self._timer_handler.current_slot
-            if self._current_slot is not None:
-                _LOGGER.debug(
-                    "Schedule {} is triggered, proceed with actions".format(
-                        self.schedule_id
-                    )
+            await self.async_release_tracks(previous_slots)
+
+            _LOGGER.debug(
+                "Schedule {} is triggered, proceed with actions".format(
+                    self.schedule_id
                 )
-                await self._action_handler.async_queue_actions(
-                    self.schedule[const.ATTR_TIMESLOTS][self._current_slot]
-                )
+            )
+            await self.async_sync_tracks()
 
         @callback
         async def async_trigger_finished(_now):
@@ -406,6 +484,7 @@ class ScheduleEntity(ToggleEntity):
             "entities": self.entities,
             "actions": self.actions,
             "current_slot": self._current_slot,
+            "current_slots": self._current_slots,
             "next_slot": self._next_entries[0] if len(self._next_entries) else None,
             "next_trigger": self._timestamps[self._next_entries[0]]
             if len(self._next_entries)
@@ -461,6 +540,7 @@ class ScheduleEntity(ToggleEntity):
         """turn off a schedule"""
         if self.schedule[const.ATTR_ENABLED]:
             await self._action_handler.async_empty_queue()
+            self._applied = {}
             self.coordinator.async_edit_schedule(
                 self.schedule_id, {const.ATTR_ENABLED: False}
             )
@@ -515,16 +595,25 @@ class ScheduleEntity(ToggleEntity):
         if time is not None:
             now = now.replace(hour=time.hour, minute=time.minute, second=time.second)
 
-        (slot, ts) = self._timer_handler.current_timeslot(now)
+        # every track can be inside a timeslot at the same moment, so a manual
+        # run covers all of them rather than an arbitrary one
+        active = {
+            track: slot
+            for (track, (slot, _ts)) in self._timer_handler.current_timeslots(
+                now
+            ).items()
+        }
 
         if (
-            slot is None
+            not any(x is not None for x in active.values())
             and time is None
             and len(self.schedule[const.ATTR_TIMESLOTS]) == 1
         ):
-            slot = 0
+            active = {
+                self.schedule[const.ATTR_TIMESLOTS][0][const.ATTR_TRACK]: 0
+            }
 
-        if slot is None:
+        if not any(x is not None for x in active.values()):
             _LOGGER.info(
                 "Schedule {} has no active timeslot at {}".format(
                     self.entity_id, now.strftime("%H:%M:%S")
@@ -532,14 +621,21 @@ class ScheduleEntity(ToggleEntity):
             )
             return
 
-        schedule = dict(self.schedule[const.ATTR_TIMESLOTS][slot])
-        if skip_conditions:
-            schedule[CONF_CONDITIONS] = []
+        for (track, slot) in active.items():
+            if slot is None:
+                continue
+            schedule = dict(self.schedule[const.ATTR_TIMESLOTS][slot])
+            if skip_conditions:
+                schedule[CONF_CONDITIONS] = []
 
-        _LOGGER.debug(
-            "Executing actions for {}, timeslot {}, skip_conditions {}".format(self.entity_id, slot, skip_conditions)
-        )
+            _LOGGER.debug(
+                "Executing actions for {}, timeslot {}, skip_conditions {}".format(
+                    self.entity_id, slot, skip_conditions
+                )
+            )
 
-        await self._action_handler.async_queue_actions(
-            schedule
-        )
+            await self._action_handler.async_queue_actions(
+                schedule,
+                track=track,
+                exclude_entities=self.async_owned_entities(track, active),
+            )

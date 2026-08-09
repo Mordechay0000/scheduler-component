@@ -238,28 +238,51 @@ class ActionHandler:
             self.hass, "action_queue_finished", self.async_cleanup_queues
         )
 
-    async def async_queue_actions(self, data: ScheduleEntry, skip_initial_execution = False):
-        """add new actions to queue"""
-        await self.async_empty_queue()
+    async def async_queue_actions(
+        self,
+        data: ScheduleEntry,
+        skip_initial_execution=False,
+        track=None,
+        exclude_entities=None,
+    ):
+        """add new actions to queue
+
+        Queues are kept per track, so a slot ending on one timeline leaves the
+        other timelines running. `exclude_entities` are the entities another
+        track is holding right now - this track must not drive them.
+        """
+        track = track or const.DEFAULT_TRACK
+        await self.async_empty_queue(track=track)
 
         conditions = data[CONF_CONDITIONS]
         actions = [e for x in data[const.ATTR_ACTIONS] for e in parse_service_call(x)]
         condition_type = data[const.ATTR_CONDITION_TYPE]
         track_conditions = data[const.ATTR_TRACK_CONDITIONS]
+        excluded = set(exclude_entities or [])
 
         # create an ActionQueue object per targeted entity (such that the tasks are handled independently)
         for action in actions:
             entity = action[ATTR_ENTITY_ID] if ATTR_ENTITY_ID in action else "none"
 
-            if entity not in self._queues:
-                self._queues[entity] = ActionQueue(
+            if entity in excluded:
+                _LOGGER.debug(
+                    "[{}]: {} is detached from track '{}', leaving it alone".format(
+                        self.id, entity, track
+                    )
+                )
+                continue
+
+            key = (track, entity)
+            if key not in self._queues:
+                self._queues[key] = ActionQueue(
                     self.hass, self.id, conditions, condition_type, track_conditions
                 )
 
-            self._queues[entity].add_action(action)
+            self._queues[key].add_action(action)
 
-        for queue in self._queues.copy().values():
-            await queue.async_start(skip_initial_execution)
+        for (key, queue) in list(self._queues.items()):
+            if key[0] == track:
+                await queue.async_start(skip_initial_execution)
 
     async def async_cleanup_queues(self, id: str = None):
         """remove all objects from queue which have no remaining tasks"""
@@ -279,9 +302,12 @@ class ActionHandler:
         if not len(self._queues.keys()):
             _LOGGER.debug("[{}]: Finished execution of tasks".format(self.id))
 
-    async def async_empty_queue(self, **kwargs):
-        """remove all objects from queue"""
+    async def async_empty_queue(self, track=None, **kwargs):
+        """remove objects from queue - all of them, or one track's"""
         restore_time = kwargs.get("restore_time")
+
+        def selected():
+            return [k for k in self._queues if track is None or k[0] == track]
 
         async def async_clear_queue(_now=None):
             """clear queue"""
@@ -289,14 +315,13 @@ class ActionHandler:
                 self._timer()
                 self._timer = None
 
-            while len(self._queues.keys()):
-                key = list(self._queues.keys())[0]
+            for key in selected():
                 await self._queues[key].async_clear()
                 self._queues.pop(key)
 
         if restore_time:
             await self.async_cleanup_queues()
-            if not len(self._queues):
+            if not len(selected()):
                 return
 
             _LOGGER.debug(

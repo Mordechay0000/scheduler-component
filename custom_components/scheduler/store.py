@@ -17,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 
 DATA_REGISTRY = f"{const.DOMAIN}_storage"
 STORAGE_KEY = f"{const.DOMAIN}.storage"
-STORAGE_VERSION = 3
+STORAGE_VERSION = 4
 SAVE_DELAY = 10
 
 
@@ -50,6 +50,16 @@ class TimeslotEntry:
     condition_type = attr.ib(type=str, default=None)
     track_conditions = attr.ib(type=bool, default=False)
     actions = attr.ib(type=[ActionEntry], default=[])
+    # a label for the slot, so a plan can name the stretches it is made of
+    name = attr.ib(type=str, default=None)
+    # a period of its own, narrowing the schedule's - a one-off exception is a
+    # slot that stops coming back once its day has passed
+    start_date = attr.ib(type=str, default=None)
+    end_date = attr.ib(type=str, default=None)
+    # the timeline this slot belongs to - slots on different tracks overlap
+    track = attr.ib(type=str, default=const.DEFAULT_TRACK)
+    # which track wins when two of them target the same entity at once
+    priority = attr.ib(type=int, default=const.DEFAULT_PRIORITY)
 
 
 @attr.s(slots=True, frozen=True)
@@ -78,6 +88,13 @@ def parse_schedule_data(data: dict):
     if const.ATTR_TIMESLOTS in data:
         timeslots = []
         for item in data[const.ATTR_TIMESLOTS]:
+            item = dict(item)
+            # a slot without a track is on the timeline schedules have always
+            # had - never on a nameless one of its own
+            if not item.get(const.ATTR_TRACK):
+                item[const.ATTR_TRACK] = const.DEFAULT_TRACK
+            if item.get(const.ATTR_PRIORITY) is None:
+                item[const.ATTR_PRIORITY] = const.DEFAULT_PRIORITY
             timeslot = TimeslotEntry(**item)
             if CONF_CONDITIONS in item and item[CONF_CONDITIONS]:
                 conditions = []
@@ -135,6 +152,30 @@ class MigratableStore(Store):
                     {
                         **entry,
                         const.ATTR_TIMESLOTS: remove_unequal_number_conditions(entry[const.ATTR_TIMESLOTS])
+                    }
+                    for entry in data["schedules"]
+                ]
+                if "schedules" in data
+                else []
+            )
+        if old_version < 4:
+            # every existing slot belongs to the one timeline schedules used to
+            # have, and owns its entities as strongly as any other slot there
+            data["schedules"] = (
+                [
+                    {
+                        **entry,
+                        const.ATTR_TIMESLOTS: [
+                            {
+                                ATTR_NAME: None,
+                                const.ATTR_TRACK: const.DEFAULT_TRACK,
+                                const.ATTR_PRIORITY: const.DEFAULT_PRIORITY,
+                                const.ATTR_START_DATE: None,
+                                const.ATTR_END_DATE: None,
+                                **slot,
+                            }
+                            for slot in entry[const.ATTR_TIMESLOTS]
+                        ],
                     }
                     for entry in data["schedules"]
                 ]
@@ -226,6 +267,11 @@ class ScheduleStorage:
                     const.ATTR_CONDITION_TYPE: slot.condition_type,
                     const.ATTR_TRACK_CONDITIONS: slot.track_conditions,
                     const.ATTR_ACTIONS: [],
+                    ATTR_NAME: slot.name,
+                    const.ATTR_TRACK: slot.track,
+                    const.ATTR_PRIORITY: slot.priority,
+                    const.ATTR_START_DATE: slot.start_date,
+                    const.ATTR_END_DATE: slot.end_date,
                 }
                 if slot.conditions:
                     for condition in slot.conditions:

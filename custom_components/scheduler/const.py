@@ -61,12 +61,30 @@ OffsetTimePattern = re.compile(r"^([a-z]+)([-|\+]{1})([0-9:]+)$")
 # An anchor may also be an entity that publishes a time, e.g.
 # "sensor.jewish_calendar_shkia-00:18:00". Entity ids always contain a dot, so
 # this pattern and OffsetTimePattern can never match the same string.
-EntityOffsetTimePattern = re.compile(r"^([a-z_]+\.[a-z0-9_]+)([-|\+]{1})([0-9:]+)$")
+#
+# "@" reads the anchor for its *date* and takes the time of day from the
+# operand: "sensor.jewish_calendar_upcoming_havdalah@06:30:00" is half past six
+# on the morning of the day Shabbat ends. A weekday rule cannot say that, since
+# the day may be a festival - and a plain "06:30:00" would fire every day of the
+# week instead of only inside the band it belongs to.
+DAY_ANCHOR = "@"
+EntityOffsetTimePattern = re.compile(r"^([a-z_]+\.[a-z0-9_]+)([-\+@]{1})([0-9:]+)$")
 DatePattern = re.compile(r"^[0-9]+\-[0-9]+\-[0-9]+$")
 
 ATTR_START = "start"
 ATTR_STOP = "stop"
 ATTR_TIMESLOTS = "timeslots"
+# A track groups timeslots into one timeline. Timeslots on different tracks run
+# independently, so a boundary that only concerns one device stops splitting the
+# schedule for every other device. Omitting it keeps the single timeline that
+# schedules have always had.
+ATTR_TRACK = "track"
+DEFAULT_TRACK = "default"
+# When two tracks act on the same entity at the same moment, the higher priority
+# one owns it: that is what lets a device leave its group for a while and return
+# to it afterwards without the group being edited.
+ATTR_PRIORITY = "priority"
+DEFAULT_PRIORITY = 0
 ATTR_WEEKDAYS = "weekdays"
 ATTR_ENABLED = "enabled"
 ATTR_SCHEDULE_ID = "schedule_id"
@@ -149,10 +167,29 @@ ACTION_SCHEMA = vol.Schema(
     }
 )
 
+def validate_track(value):
+    """Input must be either none or a non-empty track name."""
+    if value is None:
+        return DEFAULT_TRACK
+    value = cv.string(value).strip()
+    if not value:
+        return DEFAULT_TRACK
+    return value
+
+
 TIMESLOT_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_START): validate_time,
         vol.Optional(ATTR_STOP): validate_time,
+        # a slot may narrow the schedule's period, which is how a one-off
+        # exception stops repeating once it has been and gone
+        vol.Optional(ATTR_START_DATE, default=None): validate_date,
+        vol.Optional(ATTR_END_DATE, default=None): validate_date,
+        vol.Optional(ATTR_NAME): vol.Any(cv.string, None),
+        vol.Optional(ATTR_TRACK, default=DEFAULT_TRACK): validate_track,
+        vol.Optional(ATTR_PRIORITY, default=DEFAULT_PRIORITY): vol.All(
+            vol.Coerce(int), vol.Range(min=0)
+        ),
         vol.Optional(CONF_CONDITIONS): vol.All(
             cv.ensure_list, vol.Length(min=1), [CONDITION_SCHEMA]
         ),

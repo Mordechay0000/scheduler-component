@@ -38,6 +38,11 @@ ATTR_WORKDAYS = "workdays"
 # day - the difference between "every day at 19:08" and "this Friday at 19:08".
 AnchorTime = namedtuple("AnchorTime", ["timestamp", "dated"])
 
+# Something the timer has to wake up for: a slot on `track` either starting or
+# ending. Several of them can share a moment, which is how independent tracks
+# can change at the same instant without one of them being lost.
+TimerEvent = namedtuple("TimerEvent", ["timestamp", "track", "slot", "is_end"])
+
 
 def has_sun(time_str: str):
     return const.OffsetTimePattern.match(time_str)
@@ -109,9 +114,12 @@ class TimerHandler:
         self._start_date = None
         self._end_date = None
         self._timeslots = []
+        self._track_slots = {}
         self._timer = None
+        self._timer_is_endpoint = False
         self._next_trigger = None
         self._next_slot = None
+        self._pending = []
         self._anchor_tracker = None
         self._tracked_anchors = []
         self._workday_tracker = None
@@ -120,6 +128,7 @@ class TimerHandler:
         self.slot_queue = []
         self.timestamps = []
         self.current_slot = None
+        self.current_slots = {}
 
         self.hass.loop.create_task(self.async_reload_data())
 
@@ -141,10 +150,55 @@ class TimerHandler:
         self._start_date = data[const.ATTR_START_DATE]
         self._end_date = data[const.ATTR_END_DATE]
         self._timeslots = [
-            dict((k, slot[k]) for k in [const.ATTR_START, const.ATTR_STOP] if k in slot)
+            dict(
+                (k, slot[k])
+                for k in [
+                    const.ATTR_START,
+                    const.ATTR_STOP,
+                    const.ATTR_TRACK,
+                    const.ATTR_START_DATE,
+                    const.ATTR_END_DATE,
+                ]
+                if k in slot
+            )
             for slot in data[const.ATTR_TIMESLOTS]
         ]
+        self._track_slots = self.group_slots_by_track()
         await self.async_start_timer()
+
+    def group_slots_by_track(self):
+        """split the timeslots into the independent timelines they belong to
+
+        A schedule used to be a single partition of the day, so a boundary that
+        only mattered to one device still cut every other device's slot in two.
+        Slots that name a track keep their own partition instead.
+        """
+        tracks = {}
+        for (index, slot) in enumerate(self._timeslots):
+            track = slot.get(const.ATTR_TRACK) or const.DEFAULT_TRACK
+            tracks.setdefault(track, []).append(index)
+        return tracks
+
+    def slot_dates(self, index: int):
+        """the period a slot may run in, narrowed by its own if it has one"""
+        slot = self._timeslots[index]
+        start = slot.get(const.ATTR_START_DATE)
+        end = slot.get(const.ATTR_END_DATE)
+        start = max(x for x in [start, self._start_date] if x) if (
+            start or self._start_date
+        ) else None
+        end = min(x for x in [end, self._end_date] if x) if (
+            end or self._end_date
+        ) else None
+        return (start, end)
+
+    def primary_slot(self, current_slots: dict):
+        """the one slot to report for schedules that only have one track"""
+        if const.DEFAULT_TRACK in current_slots:
+            slot = current_slots[const.DEFAULT_TRACK]
+            if slot is not None:
+                return slot
+        return next((x for x in current_slots.values() if x is not None), None)
 
     async def async_unload(self):
         """unload a timer class object"""
@@ -153,30 +207,46 @@ class TimerHandler:
         self._next_trigger = None
 
     async def async_start_timer(self):
-        [current_slot, timestamp_end] = self.current_timeslot()
-        [next_slot, timestamp_next] = self.next_timeslot()
+        now = dt_util.as_local(dt_util.utcnow())
+        starts = self.compute_slot_starts(now)
+        # refresh the ordering and the moments the frontend reads
+        self.next_timeslot(timestamps=starts)
 
         self._watched_times = []
-        if timestamp_next is not None:
-            self._watched_times.append(self._timeslots[next_slot][const.ATTR_START])
-        if timestamp_end is not None:
-            self._watched_times.append(self._timeslots[current_slot][const.ATTR_STOP])
+        current_slots = {}
+        events = []
 
-        # the next trigger time is next slot or end of current slot (whichever comes first)
-        timestamp = find_closest_from_now([timestamp_end, timestamp_next])
-        self._timer_is_endpoint = (
-            timestamp != timestamp_next and timestamp == timestamp_end
+        for (track, slots) in self._track_slots.items():
+            [current_slot, timestamp_end] = self.current_timeslot(slots=slots)
+            [next_slot, timestamp_next] = self.next_timeslot(
+                slots=slots, timestamps=starts
+            )
+            current_slots[track] = current_slot
+            if timestamp_next is not None:
+                self._watched_times.append(self._timeslots[next_slot][const.ATTR_START])
+                events.append(TimerEvent(timestamp_next, track, next_slot, False))
+            if timestamp_end is not None:
+                self._watched_times.append(self._timeslots[current_slot][const.ATTR_STOP])
+                events.append(TimerEvent(timestamp_end, track, current_slot, True))
+
+        # the next trigger time is the soonest boundary of any track - every
+        # track that shares that moment is handled in the same wake-up
+        timestamp = find_closest_from_now([x.timestamp for x in events])
+        self._pending = (
+            [x for x in events if x.timestamp == timestamp]
+            if timestamp is not None
+            else []
         )
-        if timestamp == timestamp_next and timestamp is not None:
-            self._next_slot = next_slot
-        else:
-            self._next_slot = None
+        self._timer_is_endpoint = bool(self._pending) and all(
+            x.is_end for x in self._pending
+        )
+        self._next_slot = next((x.slot for x in self._pending if not x.is_end), None)
 
-        self.current_slot = current_slot
+        self.current_slots = current_slots
+        self.current_slot = self.primary_slot(current_slots)
         self._next_trigger = timestamp
 
         await self.async_start_anchor_tracker()
-        now = dt_util.as_local(dt_util.utcnow())
 
         if timestamp is not None:
             if self._timer:
@@ -316,9 +386,18 @@ class TimerHandler:
 
     async def async_timer_finished(self, _time):
         """the timer is finished"""
-        if not self._timer_is_endpoint:
-            # timer marks the start of a new timeslot
-            self.current_slot = self._next_slot
+        # a track whose slot ends exactly where the next one starts is handing
+        # over, not falling idle, so the start wins over the end
+        started = {x.track: x.slot for x in self._pending if not x.is_end}
+        for event in self._pending:
+            if event.track not in started:
+                self.current_slots[event.track] = None
+        for (track, slot) in started.items():
+            self.current_slots[track] = slot
+        self.current_slot = self.primary_slot(self.current_slots)
+
+        if started:
+            # timer marks the start of a new timeslot on at least one track
             _LOGGER.debug(
                 "Timer {} has reached slot {}".format(self.id, self.current_slot)
             )
@@ -372,12 +451,20 @@ class TimerHandler:
         now: datetime.datetime = None,
         iteration: int = 0,
         reverse_direction: bool = False,
+        dates: tuple = None,
     ) -> datetime.datetime:
-        """calculate the next occurence of a time string"""
+        """calculate the next occurence of a time string
+
+        `dates` is the (start, end) period the result must fall in; without it
+        the schedule's own period is used.
+        """
         if time_str is None:
             return None
         if now is None:
             now = dt_util.as_local(dt_util.utcnow())
+        if dates is None:
+            dates = (self._start_date, self._end_date)
+        (start_date, end_date) = dates
 
         parsed = parse_anchor(time_str)
         if parsed is None:
@@ -393,9 +480,29 @@ class TimerHandler:
             if not resolved:
                 return None
             ts = resolved.timestamp.replace(second=0, microsecond=0)
-            offset = dt_util.parse_time(offset_str)
+            operand = dt_util.parse_time(offset_str)
+
+            if sign == const.DAY_ANCHOR:
+                # the anchor decides the day, the operand decides the time of
+                # day: 06:30 on the morning Shabbat ends, whichever day that is
+                if not resolved.dated:
+                    _LOGGER.warning(
+                        "Anchor {} of schedule {} publishes a time of day, so it "
+                        "cannot decide a date for '{}'".format(
+                            anchor, self.id, time_str
+                        )
+                    )
+                    return None
+                ts = ts.replace(
+                    hour=operand.hour,
+                    minute=operand.minute,
+                    second=operand.second,
+                    microsecond=0,
+                )
+                return self.apply_date_restrictions(ts, dates)
+
             offset = datetime.timedelta(
-                hours=offset.hour, minutes=offset.minute, seconds=offset.second
+                hours=operand.hour, minutes=operand.minute, seconds=operand.second
             )
 
             if resolved.dated:
@@ -403,7 +510,7 @@ class TimerHandler:
                 # may cross midnight - which is the whole point for a band that
                 # runs from Friday evening into Saturday night.
                 ts = ts - offset if sign == "-" else ts + offset
-                return self.apply_date_restrictions(ts)
+                return self.apply_date_restrictions(ts, dates)
 
             time_anchor = datetime.timedelta(
                 hours=ts.hour, minutes=ts.minute, seconds=ts.second
@@ -430,17 +537,17 @@ class TimerHandler:
             (ts - now).total_seconds() > 0 or iteration > 0
         ):
 
-            if self._start_date and days_until_date(self._start_date, ts) > 0:
+            if start_date and days_until_date(start_date, ts) > 0:
                 # start date is in the future, jump to start date
                 end_of_day = ts.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
-                days_delta = days_until_date(self._start_date, end_of_day)
+                days_delta = days_until_date(start_date, end_of_day)
                 if days_delta:
                     time_delta = datetime.timedelta(days=days_delta)
 
-            elif self._end_date and days_until_date(self._end_date, ts) < 0:
+            elif end_date and days_until_date(end_date, ts) < 0:
                 # end date is in the past, jump to end date
                 time_delta = datetime.timedelta(
-                    days=days_until_date(self._end_date, ts)
+                    days=days_until_date(end_date, ts)
                 )
                 reverse_direction = True
 
@@ -460,14 +567,17 @@ class TimerHandler:
             )
             return None
         return self.calculate_timestamp(
-            time_str, next_day, iteration + 1, reverse_direction
+            time_str, next_day, iteration + 1, reverse_direction, dates
         )
 
-    def apply_date_restrictions(self, ts: datetime.datetime):
-        """drop a timestamp that falls outside the schedule's date range"""
-        if self._start_date and days_until_date(self._start_date, ts) > 0:
+    def apply_date_restrictions(self, ts: datetime.datetime, dates: tuple = None):
+        """drop a timestamp that falls outside the applicable date range"""
+        if dates is None:
+            dates = (self._start_date, self._end_date)
+        (start_date, end_date) = dates
+        if start_date and days_until_date(start_date, ts) > 0:
             return None
-        if self._end_date and days_until_date(self._end_date, ts) < 0:
+        if end_date and days_until_date(end_date, ts) < 0:
             return None
         return ts
 
@@ -526,37 +636,62 @@ class TimerHandler:
         )
         return None
 
-    def next_timeslot(self):
-        """calculate the closest timeslot from now"""
+    def compute_slot_starts(self, now: datetime.datetime = None):
+        """the next start of every timeslot, index-aligned with the timeslots"""
+        if now is None:
+            now = dt_util.as_local(dt_util.utcnow())
+        return [
+            self.calculate_timestamp(
+                slot[const.ATTR_START], now, dates=self.slot_dates(index)
+            )
+            for (index, slot) in enumerate(self._timeslots)
+        ]
+
+    def next_timeslot(self, slots: list = None, timestamps: list = None):
+        """calculate the closest timeslot from now
+
+        `slots` narrows the search to one track's slots; without it the whole
+        schedule is considered, which is also what refreshes the ordering the
+        frontend reads.
+        """
         now = dt_util.as_local(dt_util.utcnow())
-        # calculate next start of all timeslots
-        timestamps = [
-            self.calculate_timestamp(slot[const.ATTR_START], now)
-            for slot in self._timeslots
-        ]
+        if timestamps is None:
+            timestamps = self.compute_slot_starts(now)
 
-        # calculate timeslot that will start soonest (or closest in the past)
-        remaining = [
-            abs((ts - now).total_seconds()) if ts is not None else now.timestamp()
-            for ts in timestamps
-        ]
-        slot_order = sorted(range(len(remaining)), key=lambda k: remaining[k])
+        candidates = range(len(timestamps)) if slots is None else slots
 
-        # filter out timeslots that cannot be computed
-        for i in range(len(timestamps)):
-            if timestamps[i] is None:
-                slot_order.remove(i)
-        timestamps = [e for e in timestamps if e is not None]
+        # timeslots that cannot be computed take no part in the ordering
+        remaining = {
+            i: abs((timestamps[i] - now).total_seconds())
+            for i in candidates
+            if timestamps[i] is not None
+        }
+        slot_order = sorted(remaining, key=lambda k: remaining[k])
 
-        self.slot_queue = slot_order
-        self.timestamps = timestamps
+        if slots is None:
+            # timestamps stays index-aligned with the timeslots, so that
+            # timestamps[slot_queue[0]] is that slot's own moment even when
+            # another slot has an anchor that cannot be resolved yet
+            self.slot_queue = slot_order
+            self.timestamps = timestamps
 
         next_slot = slot_order[0] if len(slot_order) > 0 else None
 
         return (next_slot, timestamps[next_slot] if next_slot is not None else None)
 
-    def current_timeslot(self, now: datetime.datetime = None):
-        """calculate the end of the timeslot that is overlapping now"""
+    def current_timeslots(self, now: datetime.datetime = None):
+        """the slot each track is overlapping at a moment, keyed by track"""
+        return {
+            track: self.current_timeslot(now, slots=slots)
+            for (track, slots) in self._track_slots.items()
+        }
+
+    def current_timeslot(self, now: datetime.datetime = None, slots: list = None):
+        """calculate the end of the timeslot that is overlapping now
+
+        `slots` narrows the search to one track's slots. Tracks partition the
+        day separately, so each of them can have a slot overlapping now.
+        """
         if now is None:
             now = dt_util.as_local(dt_util.utcnow())
 
@@ -566,32 +701,45 @@ class TimerHandler:
             else:
                 return time_str
 
-        # calculate next stop of all timeslots
-        timestamps = []
-        for slot in self._timeslots:
+        candidates = (
+            list(range(len(self._timeslots))) if slots is None else list(slots)
+        )
+        if not candidates:
+            return (None, None)
+
+        # calculate next stop of the timeslots under consideration
+        timestamps = {}
+        for i in candidates:
+            slot = self._timeslots[i]
+            dates = self.slot_dates(i)
             if slot[const.ATTR_STOP] is not None:
-                timestamps.append(
-                    self.calculate_timestamp(
-                        unwrap_end_of_day(slot[const.ATTR_STOP]), now
-                    )
+                timestamps[i] = self.calculate_timestamp(
+                    unwrap_end_of_day(slot[const.ATTR_STOP]), now, dates=dates
                 )
             else:
-                ts = self.calculate_timestamp(slot[const.ATTR_START], now)
+                ts = self.calculate_timestamp(
+                    slot[const.ATTR_START], now, dates=dates
+                )
                 if ts is None:
-                    timestamps.append(None)
+                    timestamps[i] = None
                 else:
                     ts = ts + datetime.timedelta(minutes=1)
-                    timestamps.append(
-                        self.calculate_timestamp(ts.strftime("%H:%M:%S"), now)
+                    timestamps[i] = self.calculate_timestamp(
+                        ts.strftime("%H:%M:%S"), now, dates=dates
                     )
 
         # calculate timeslot that will end soonest
         remaining = [
-            (ts - now).total_seconds() if ts is not None else now.timestamp()
-            for ts in timestamps
+            (
+                i,
+                (timestamps[i] - now).total_seconds()
+                if timestamps[i] is not None
+                else now.timestamp(),
+            )
+            for i in candidates
         ]
         (next_slot_end, val) = sorted(
-            enumerate(remaining), key=lambda i: (i[1] < 0, abs(i[1]))
+            remaining, key=lambda i: (i[1] < 0, abs(i[1]))
         )[0]
 
         stop = timestamps[next_slot_end]
@@ -604,6 +752,7 @@ class TimerHandler:
             start = self.calculate_timestamp(
                 self._timeslots[next_slot_end][const.ATTR_START],
                 stop - datetime.timedelta(days=1),
+                dates=self.slot_dates(next_slot_end),
             )
 
             if start is not None:

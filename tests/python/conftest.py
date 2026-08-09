@@ -56,3 +56,48 @@ def states():
 @pytest.fixture
 def hass(states):
     return SimpleNamespace(states=states)
+
+
+def make_timer(hass, timeslots=None, weekdays=None):
+    """A TimerHandler with just enough state for the pure calculations.
+
+    __init__ schedules a coroutine on the event loop, which these tests have
+    no use for, so the object is built directly.
+    """
+    from scheduler import const
+    from scheduler.timer import TimerHandler
+
+    timer = TimerHandler.__new__(TimerHandler)
+    timer.hass = hass
+    timer.id = "test_schedule"
+    timer._weekdays = weekdays if weekdays is not None else [const.DAY_TYPE_DAILY]
+    timer._start_date = None
+    timer._end_date = None
+    timer._timeslots = [
+        {const.ATTR_STOP: None, **slot} for slot in (timeslots or [])
+    ]
+    timer._track_slots = timer.group_slots_by_track()
+    timer._timer = None
+    timer._timer_is_endpoint = False
+    timer._next_trigger = None
+    timer._next_slot = None
+    timer._pending = []
+    timer._anchor_tracker = None
+    timer._tracked_anchors = []
+    timer._workday_tracker = None
+    timer._watched_times = []
+    timer.slot_queue = []
+    timer.timestamps = []
+    timer.current_slot = None
+    timer.current_slots = {}
+    return timer
+
+
+@pytest.fixture
+def timer_factory(hass):
+    """Build a TimerHandler against the stub hass."""
+
+    def factory(timeslots=None, weekdays=None):
+        return make_timer(hass, timeslots=timeslots, weekdays=weekdays)
+
+    return factory

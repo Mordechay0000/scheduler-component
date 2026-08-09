@@ -11,28 +11,9 @@ import pytest
 import voluptuous as vol
 import homeassistant.util.dt as dt_util
 
+from conftest import make_timer
 from scheduler import const
-from scheduler.timer import TimerHandler, anchor_entity, parse_anchor
-
-
-def make_timer(hass, timeslots=None, weekdays=None):
-    """A TimerHandler with just enough state for the pure calculations.
-
-    __init__ schedules a coroutine on the event loop, which these tests have
-    no use for, so the object is built directly.
-    """
-    timer = TimerHandler.__new__(TimerHandler)
-    timer.hass = hass
-    timer.id = "test_schedule"
-    timer._weekdays = weekdays if weekdays is not None else [const.DAY_TYPE_DAILY]
-    timer._start_date = None
-    timer._end_date = None
-    timer._timeslots = timeslots or []
-    timer._next_trigger = None
-    timer._watched_times = []
-    timer._anchor_tracker = None
-    timer._tracked_anchors = []
-    return timer
+from scheduler.timer import anchor_entity, parse_anchor
 
 
 # --- the time format ------------------------------------------------------
@@ -45,6 +26,7 @@ def make_timer(hass, timeslots=None, weekdays=None):
         ("sunrise-01:00:00", ("sunrise", "-", "01:00:00")),
         ("sensor.jewish_calendar_shkia-00:18:00", ("sensor.jewish_calendar_shkia", "-", "00:18:00")),
         ("input_datetime.havdalah+00:00:00", ("input_datetime.havdalah", "+", "00:00:00")),
+        ("sensor.havdalah@06:30:00", ("sensor.havdalah", "@", "06:30:00")),
         ("22:30:00", None),
         ("00:00:00", None),
     ],
@@ -74,6 +56,7 @@ def test_anchor_entity(value, expected):
         "sunrise-01:00:00",
         "sensor.jewish_calendar_shkia-00:18:00",
         "binary_sensor.a_b_1+00:00:00",
+        "sensor.jewish_calendar_upcoming_havdalah@06:30:00",
     ],
 )
 def test_validate_time_accepts(value):
@@ -89,6 +72,8 @@ def test_validate_time_accepts(value):
         "sensor..shkia+00:10:00",    # not an entity id
         "Sensor.Shkia+00:10:00",     # entity ids are lowercase
         "sensor.shkia*00:10:00",     # not an offset sign
+        "sunset@22:30:00",           # a sun event names no date to borrow
+        "sensor.shkia@24:30:00",     # not a time of day
         "not a time",
     ],
 )
@@ -303,6 +288,60 @@ def test_dated_anchor_in_the_past_is_kept(hass, states):
     assert ts is not None
     assert ts < now
     assert ts.date() == datetime.date(2020, 1, 3)
+
+
+# --- a clock time on the day an anchor names -------------------------------
+#
+# The stretches inside a Shabbat band are ordinary clock times - 22:30, 06:30,
+# 13:00 - but they only apply on the days of that band. A weekday rule fires
+# them every week whether or not it is a festival, and a plain time fires them
+# every single day; "@" ties them to the day the anchor picked out.
+
+
+def test_day_anchor_takes_the_date_from_the_anchor(hass, states):
+    states.set("sensor.jewish_calendar_upcoming_havdalah", "2026-08-15T17:12:00+00:00")
+    timer = make_timer(hass)
+    now = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    ts = timer.calculate_timestamp(
+        "sensor.jewish_calendar_upcoming_havdalah@06:30:00", now
+    )
+
+    assert ts.date() == datetime.date(2026, 8, 15)  # the day Shabbat ends
+    assert (ts.hour, ts.minute) == (6, 30)
+
+
+def test_day_anchor_reaches_back_to_the_evening_it_started(hass, states):
+    """22:30 on Friday night, taken from the candle lighting anchor."""
+    states.set(
+        "sensor.jewish_calendar_upcoming_candle_lighting",
+        "2026-08-14T16:29:00+00:00",
+    )
+    timer = make_timer(hass, weekdays=["sunday"])
+    now = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    ts = timer.calculate_timestamp(
+        "sensor.jewish_calendar_upcoming_candle_lighting@22:30:00", now
+    )
+
+    assert ts.date() == datetime.date(2026, 8, 14)
+    assert ts.weekday() == 4  # Friday, though the schedule says Sunday
+    assert (ts.hour, ts.minute) == (22, 30)
+
+
+def test_day_anchor_needs_an_anchor_that_names_a_day(hass, states):
+    states.set("sensor.shkia", "19:26")
+    timer = make_timer(hass)
+
+    assert timer.calculate_timestamp("sensor.shkia@06:30:00", dt_util.now()) is None
+
+
+def test_day_anchor_respects_date_restrictions(hass, states):
+    states.set("sensor.havdalah", "2026-08-15T17:12:00+00:00")
+    timer = make_timer(hass)
+    timer._start_date = "2026-09-01"
+
+    assert timer.calculate_timestamp("sensor.havdalah@06:30:00", dt_util.now()) is None
 
 
 # --- which entities the timer must watch ----------------------------------

@@ -66,8 +66,13 @@ add:
         object:
     timeslots:
       name: Timeslots
-      description: list of timeslots with their actions and optionally conditions (should be kept the same for all timeslots)
-      example: '[{start: "12:00", stop: "13:00", actions: [{service: "light.turn_on", entity_id: "light.my_lamp", service_data: {brightness: 200}}]}]'
+      description: >
+        list of timeslots with their actions and optionally conditions (conditions should be kept the same for all timeslots).
+        A timeslot may carry a name, and a track - slots on different tracks form independent timelines, so a boundary that
+        concerns one device does not split the others. When two tracks act on the same entity at once, the higher priority
+        one owns it. start and stop accept a clock time, sunrise/sunset with an offset, or an entity that publishes a time
+        (e.g. "sensor.jewish_calendar_upcoming_candle_lighting-00:18:00").
+      example: '[{start: "12:00", stop: "13:00", name: "afternoon", track: "group", priority: 0, actions: [{service: "light.turn_on", entity_id: "light.my_lamp", service_data: {brightness: 200}}]}]'
       required: true
       selector:
         object:
@@ -126,8 +131,13 @@ edit:
         object:
     timeslots:
       name: Timeslots
-      description: list of timeslots with their actions and optionally conditions (should be kept the same for all timeslots)
-      example: '[{start: "12:00", stop: "13:00", actions: [{service: "light.turn_on", entity_id: "light.my_lamp", service_data: {brightness: 200}}]}]'
+      description: >
+        list of timeslots with their actions and optionally conditions (conditions should be kept the same for all timeslots).
+        A timeslot may carry a name, and a track - slots on different tracks form independent timelines, so a boundary that
+        concerns one device does not split the others. When two tracks act on the same entity at once, the higher priority
+        one owns it. start and stop accept a clock time, sunrise/sunset with an offset, or an entity that publishes a time
+        (e.g. "sensor.jewish_calendar_upcoming_candle_lighting-00:18:00").
+      example: '[{start: "12:00", stop: "13:00", name: "afternoon", track: "group", priority: 0, actions: [{service: "light.turn_on", entity_id: "light.my_lamp", service_data: {brightness: 200}}]}]'
       required: false
       selector:
         object:
