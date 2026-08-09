@@ -1,5 +1,6 @@
 import { AmPmFormat, convertTo12Hour } from "../../lib/use_am_pm";
 import { Time, TimeMode } from "../../types";
+import { anchorOf } from "./time_modes";
 
 type FormatOptions = {
   seconds?: boolean,
@@ -22,8 +23,17 @@ export const timeToString = (input: Time, formatOptions: FormatOptions = { secon
     output = String(input.hours).padStart(2, '0') + ':' + String(input.minutes).padStart(2, '0');
     if (formatOptions.seconds) output += ':00';
   }
+  else if (input.mode == TimeMode.EntityDay) {
+    // a clock time that borrows its date from the entity
+    output = input.entity_id
+      + '@'
+      + String(input.hours).padStart(2, '0')
+      + ':'
+      + String(input.minutes).padStart(2, '0');
+    if (formatOptions.seconds) output += ':00';
+  }
   else {
-    output = input.mode
+    output = anchorOf(input.mode, input.entity_id)
       + ((input.hours < 0 || input.minutes < 0) ? '-' : '+')
       + String(Math.abs(input.hours)).padStart(2, '0')
       + ':'

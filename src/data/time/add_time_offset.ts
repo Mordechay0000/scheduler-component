@@ -1,4 +1,5 @@
-import { Time, TimeMode } from "../../types";
+import { Time } from "../../types";
+import { isClockMode } from "./time_modes";
 
 
 
@@ -18,7 +19,7 @@ export const addTimeOffset = (time: Time, offsetTime: { hours?: number, minutes?
   hours += offsetHours;
   minutes += offsetMinutes;
 
-  if (minutes >= 60 || (minutes > 0 && hours < 0 && time.mode != TimeMode.Fixed)) {
+  if (minutes >= 60 || (minutes > 0 && hours < 0 && !isClockMode(time.mode))) {
     hours = hours + 1;
     minutes -= 60;
   }
@@ -26,20 +27,21 @@ export const addTimeOffset = (time: Time, offsetTime: { hours?: number, minutes?
     hours = hours - 1;
     minutes += 60;
   }
-  else if ((minutes < 0 && time.mode == TimeMode.Fixed) || (minutes < 0 && hours > 0 && time.mode != TimeMode.Fixed)) {
+  else if ((minutes < 0 && isClockMode(time.mode)) || (minutes < 0 && hours > 0 && !isClockMode(time.mode))) {
     hours = hours - 1;
     minutes += 60;
   }
-  if (hours < 0 && time.mode == TimeMode.Fixed) {
+  if (hours < 0 && isClockMode(time.mode)) {
     hours += 24;
   }
-  else if (hours >= 24 && time.mode == TimeMode.Fixed) {
+  else if (hours >= 24 && isClockMode(time.mode)) {
     hours -= 24;
   }
 
   return <Time>{
     mode: time.mode,
     hours: hours,
-    minutes: minutes
+    minutes: minutes,
+    entity_id: time.entity_id
   };
 }

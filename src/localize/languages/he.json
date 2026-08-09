@@ -87,7 +87,8 @@
         "interval": "משעה {startTime} עד שעה {endTime}",
         "at_midnight": "בחצות הלילה",
         "at_noon": "בחצות היום",
-        "at_sun_event": "ב {sunEvent}"
+        "at_sun_event": "ב {sunEvent}",
+        "on_day_of": "בשעה {time} ביום של {anchor}"
       }
     },
     "dialog": {

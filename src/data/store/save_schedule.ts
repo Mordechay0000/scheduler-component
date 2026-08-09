@@ -73,6 +73,11 @@ const parseTimeslot = (input: Timeslot): LegacyTimeslot => {
   return <LegacyTimeslot>{
     start: input.start,
     stop: input.stop,
+    name: input.name,
+    track: input.track,
+    priority: input.priority,
+    start_date: input.start_date,
+    end_date: input.end_date,
     actions: input.actions.map(e => parseAction(e)).flat(),
     condition_type: input.conditions.items.length
       ? input.conditions.type == TConditionLogicType.And ? 'and' : 'or'

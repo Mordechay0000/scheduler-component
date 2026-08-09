@@ -87,7 +87,8 @@
         "interval": "from {startTime} to {endTime}",
         "at_midnight": "at midnight",
         "at_noon": "at noon",
-        "at_sun_event": "at {sunEvent}"
+        "at_sun_event": "at {sunEvent}",
+        "on_day_of": "at {time} on the day of {anchor}"
       }
     },
     "dialog": {

@@ -52,6 +52,15 @@ export interface Timeslot {
   stop?: string;
   actions: Action[];
   conditions: ConditionConfig
+  /** what this stretch is called, shown on the slot itself */
+  name?: string;
+  /** the timeline this slot belongs to; slots on different tracks overlap */
+  track?: string;
+  /** which track wins when two of them target the same entity at once */
+  priority?: number;
+  /** a period of its own, narrowing the schedule's */
+  start_date?: string;
+  end_date?: string;
 }
 
 export interface Schedule {
@@ -178,13 +187,19 @@ export enum TRepeatType {
 export enum TimeMode {
   Fixed = 'fixed',
   Sunrise = 'sunrise',
-  Sunset = 'sunset'
+  Sunset = 'sunset',
+  /** an offset from a time an entity publishes, read again on every trigger */
+  Entity = 'entity',
+  /** a clock time, on the day an entity's timestamp names */
+  EntityDay = 'entity_day',
 }
 
 export type Time = {
   mode: TimeMode,
   hours: number,
-  minutes: number
+  minutes: number,
+  /** the entity the time is anchored to, for the entity modes */
+  entity_id?: string,
 };
 
 export type CustomConfig = Record<string, CustomEntityConfig>;
