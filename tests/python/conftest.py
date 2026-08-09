@@ -38,7 +38,10 @@ class FakeStates:
 
     def set(self, entity_id, state, attributes=None):
         self._states[entity_id] = SimpleNamespace(
-            entity_id=entity_id, state=state, attributes=attributes or {}
+            entity_id=entity_id,
+            state=state,
+            attributes=attributes or {},
+            domain=entity_id.split(".")[0],
         )
 
     def remove(self, entity_id):
@@ -46,6 +49,9 @@ class FakeStates:
 
     def get(self, entity_id):
         return self._states.get(entity_id)
+
+    def async_all(self):
+        return list(self._states.values())
 
 
 @pytest.fixture
@@ -55,7 +61,7 @@ def states():
 
 @pytest.fixture
 def hass(states):
-    return SimpleNamespace(states=states)
+    return SimpleNamespace(states=states, data={})
 
 
 def make_timer(hass, timeslots=None, weekdays=None):

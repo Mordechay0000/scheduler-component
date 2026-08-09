@@ -6,27 +6,22 @@ back and written again. The other is that every refusal tells the caller what
 to write instead - a model that is told "invalid time" learns nothing, and this
 whole module exists so that a weak one can correct itself.
 """
-import os
-import sys
-
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from scheduler_mcp.plan import (  # noqa: E402
+from scheduler.plan_model import (
     PLAN_TAG,
     Cube,
-    Exception_,
     Group,
     Plan,
     PlanError,
+    PlanException,
     plan_from_dict,
     plan_from_schedule,
     plan_to_dict,
     plan_to_payload,
     warnings_for,
 )
-from scheduler_mcp.times import (  # noqa: E402
+from scheduler.plan_times import (
     DEFAULT_ANCHORS,
     TimeError,
     from_engine,
@@ -207,7 +202,7 @@ def test_a_one_off_exception_carries_its_date():
 def test_two_exceptions_on_one_device_get_their_own_tracks():
     plan = worked_plan()
     plan.exceptions.append(
-        Exception_(device="switch.plata", start="havdalah@15:00", stop="havdalah@16:00")
+        PlanException(device="switch.plata", start="havdalah@15:00", stop="havdalah@16:00")
     )
     tracks = [s["track"] for s in plan_to_payload(plan)["timeslots"] if s["track"].startswith("detach:")]
 

@@ -12,5 +12,3 @@ report
 .venv-test/
 .pytest_cache/
 logs/
-mcp_server/*.egg-info/
-mcp_server/**/__pycache__/

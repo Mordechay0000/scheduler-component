@@ -124,11 +124,41 @@ is editable afterwards, and the editor is there from the first screen.
 
 ### Driving it from a model
 
-[`mcp_server/`](mcp_server/README.md) is an MCP server that exposes the plan in
-the same vocabulary — groups, stretches, exceptions — so a model can read and
-write it without knowing anything about tracks or priorities. Times are written
-the way a person says them: `candle_lighting`, `havdalah-30m`,
-`havdalah@06:30`.
+The integration registers a Home Assistant [LLM API](https://developers.home-assistant.io/docs/core/llm/)
+called **Shabbat plans**, so there is no separate server to run. Home Assistant
+serves every registered LLM API two ways:
+
+* **Over MCP** — add the [MCP Server](https://www.home-assistant.io/integrations/mcp_server/)
+  integration and point an MCP client at `/api/mcp/scheduler_shabbat` with an
+  admin long-lived access token.
+* **To Assist** — pick "Shabbat plans" as the API in any conversation agent
+  (Anthropic, OpenAI, Google, Ollama, …) under its options.
+
+Either way the tools speak the plan's vocabulary — groups, stretches,
+exceptions — so a model never has to know a track from a priority. Times are
+written the way a person says them:
+
+```
+candle_lighting        exactly when Shabbat comes in
+havdalah-30m           30 minutes before it goes out  (also 1h, 1h30m)
+havdalah@06:30         06:30 on the DAY it goes out
+13:00                  13:00 every day — rarely right inside a plan
+```
+
+That last distinction is the one that matters and the one models get wrong, so
+`scheduler_explain_time` exists to check an expression before it is used, and
+saving a plan that contains a bare clock time returns a warning saying what to
+write instead.
+
+| Tool | For |
+|---|---|
+| `scheduler_list_devices` | finding entity ids |
+| `scheduler_explain_time` | checking a time expression |
+| `scheduler_describe_anchors` | what the band's two ends are, and whether they are publishing |
+| `scheduler_get_plan` | reading the plan, in the shape `save_plan` accepts |
+| `scheduler_save_plan` | creating or replacing it, in one write |
+| `scheduler_add_exception` / `scheduler_remove_exception` | one device at a time |
+| `scheduler_list_schedules` / `scheduler_delete_schedule` | everything else |
 
 ## Documentation
 
@@ -168,7 +198,7 @@ If you want to make a donation as appreciation of the work on this project, you 
 * **שעה קבועה ביום של עוגן** – `‎…upcoming_havdalah@06:30:00` היא 06:30 בבוקר שבו הפס נגמר, יהיה זה איזה יום שיהיה. כך הגבולות הפנימיים נשארים בתוך הפס גם ביום טוב, שאף כלל ימים בשבוע לא יכול לתאר.
 * **מסלולים עצמאיים** – לכל קבוצה מחיצת זמנים משלה, ולכן גבול שנועד למכשיר אחד אינו מפצל את השאר. מכשיר שמתנתק מקבל מסלול בעדיפות גבוהה יותר: כל עוד הניתוק פועל הקבוצה לא נוגעת בו (גם אחרי הפעלה מחדש), וכשהוא נגמר הקבוצה מחזירה אותו אליה.
 * **אשף מודרך** – מי שלא רוצה להתעסק בעוגנים והיסטים עונה על כמה שאלות בשפה פשוטה ומקבל תוכנית עובדת. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
-* **שרת MCP** – התיקייה [`mcp_server/`](mcp_server/README.md) חושפת את התוכנית לפי אותו אוצר מילים (קבוצות, קוביות, חריגים), כך שמודל שפה יכול לקרוא ולכתוב אותה בלי לדעת דבר על מסלולים ועדיפויות.
+* **תמיכה במודלי שפה** – האינטגרציה רושמת LLM API בשם ״Shabbat plans״, ולכן אין שרת נפרד להריץ. Home Assistant מגיש אותו גם דרך אינטגרציית [MCP Server](https://www.home-assistant.io/integrations/mcp_server/) בכתובת `/api/mcp/scheduler_shabbat`, וגם ל-Assist ולכל סוכן שיחה (Anthropic, OpenAI, Google, Ollama). הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
 
 **עורך התזמון (Time scheme) המשופר:**
 

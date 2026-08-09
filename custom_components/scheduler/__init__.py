@@ -29,10 +29,14 @@ from homeassistant.helpers.event import (
 
 from . import const
 from .frontend import async_register_frontend, async_unregister_frontend
+from .llm_api import async_register_llm_api
 from .store import async_get_registry
 from .websockets import async_register_websockets
 
 _LOGGER = logging.getLogger(__name__)
+
+# kept outside hass.data[DOMAIN] because async_setup_entry replaces that dict
+DATA_LLM_API_REGISTERED = f"{const.DOMAIN}_llm_api_unregister"
 
 
 async def async_setup(hass, config):
@@ -58,6 +62,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     hass.data.setdefault(const.DOMAIN, {})
     hass.data[const.DOMAIN] = {"coordinator": coordinator, "schedules": {}}
+
+    # Home Assistant serves every registered LLM API over its own MCP Server
+    # integration, and offers it to Assist, so shipping a second server would
+    # only be a second thing to keep in step.
+    hass.data[DATA_LLM_API_REGISTERED] = async_register_llm_api(hass)
 
     if entry.unique_id is None:
         hass.config_entries.async_update_entry(entry, unique_id=coordinator.id)
@@ -207,6 +216,9 @@ async def async_unload_entry(hass, entry):
     coordinator = hass.data[const.DOMAIN]["coordinator"]
     await coordinator.async_unload()
     async_unregister_frontend(hass)
+    unregister_llm_api = hass.data.pop(DATA_LLM_API_REGISTERED, None)
+    if unregister_llm_api:
+        unregister_llm_api()
     return unload_ok
 
 

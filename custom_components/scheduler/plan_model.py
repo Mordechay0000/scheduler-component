@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .times import DEFAULT_ANCHORS, TimeError, from_engine, parse_time, to_engine, warn_about
+from .plan_times import DEFAULT_ANCHORS, TimeError, from_engine, parse_time, to_engine, warn_about
 
 PLAN_TAG = "shabbat-plan"
 GROUP_PREFIX = "group:"
@@ -49,7 +49,7 @@ class Group:
 
 
 @dataclass
-class Exception_:
+class PlanException:
     """One device, off on its own for a while, then back with its group."""
 
     device: str
@@ -64,7 +64,7 @@ class Exception_:
 class Plan:
     name: str
     groups: list[Group] = field(default_factory=list)
-    exceptions: list[Exception_] = field(default_factory=list)
+    exceptions: list[PlanException] = field(default_factory=list)
     anchors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ANCHORS))
 
 
@@ -91,14 +91,14 @@ def plan_from_schedule(schedule: dict[str, Any], anchors: dict[str, str] | None 
         tracks.setdefault(slot.get("track") or "default", []).append(slot)
 
     groups: list[Group] = []
-    exceptions: list[Exception_] = []
+    exceptions: list[PlanException] = []
 
     for track, track_slots in tracks.items():
         if track.startswith(DETACH_PREFIX):
             device = track[len(DETACH_PREFIX):].split("#")[0]
             for slot in track_slots:
                 exceptions.append(
-                    Exception_(
+                    PlanException(
                         device=device,
                         name=slot.get("name") or "exception",
                         start=from_engine(slot.get("start", ""), anchors),
@@ -140,7 +140,12 @@ def plan_from_schedule(schedule: dict[str, Any], anchors: dict[str, str] | None 
 
 
 def _empty_conditions() -> dict[str, Any]:
-    return {"conditions": [], "condition_type": "or", "track_conditions": False}
+    """A plan has no conditions, and the schema rejects an empty list of them.
+
+    A stretch runs because the band reached it, not because something else is
+    true, so the keys are left out entirely rather than sent empty.
+    """
+    return {}
 
 
 def plan_to_timeslots(plan: Plan) -> list[dict[str, Any]]:
@@ -325,7 +330,7 @@ def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) 
         if not raw.get("device"):
             raise PlanError("An exception needs 'device' - the entity that leaves its group.")
         exceptions.append(
-            Exception_(
+            PlanException(
                 device=raw["device"],
                 name=raw.get("name") or "exception",
                 start=raw.get("from") or "",
