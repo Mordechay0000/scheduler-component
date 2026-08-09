@@ -158,6 +158,37 @@ def test_the_plan_argument_is_a_real_schema():
     assert result["plan"]["groups"][0]["cubes"][0]["state"] == "on"
 
 
+def test_the_prompt_says_when_to_override_and_when_to_detach():
+    """The two are easy to confuse, and picking wrong duplicates a timeline."""
+    assert "overrides" in API_PROMPT
+    assert "its own *hours*" in API_PROMPT
+    assert "enforce" in API_PROMPT
+
+
+def test_the_schema_offers_overrides_and_light_parameters():
+    schema = SavePlanTool.parameters
+    result = schema({
+        "plan": {"groups": [{"name": "g", "devices": ["light.a", "switch.b"], "cubes": [{
+            "from": "candle_lighting", "to": "havdalah", "state": "on",
+            "brightness": 40, "kelvin": 2200, "enforce": True,
+            "overrides": [{"device": "switch.b", "state": "off"}],
+        }]}]}
+    })
+    cube = result["plan"]["groups"][0]["cubes"][0]
+    assert cube["brightness"] == 40
+    assert cube["overrides"][0]["device"] == "switch.b"
+    assert cube["enforce"] is True
+
+
+@pytest.mark.parametrize("field,value", [("brightness", 0), ("brightness", 150), ("kelvin", 100)])
+def test_the_schema_keeps_a_parameter_in_range(field, value):
+    with pytest.raises(vol.Invalid):
+        SavePlanTool.parameters({
+            "plan": {"groups": [{"name": "g", "devices": ["light.a"], "cubes": [
+                {"from": "candle_lighting", "to": "havdalah", field: value}]}]}
+        })
+
+
 def test_a_tool_says_so_when_the_integration_is_not_set_up(hass):
     result = call(ListSchedulesTool, hass)
     assert result["ok"] is False
@@ -263,6 +294,57 @@ def test_a_plan_that_would_fire_every_day_saves_but_says_so(hass, coordinator):
 
     assert result["ok"]
     assert result["warnings"] and "every day of the week" in result["warnings"][0]
+
+
+def test_a_device_can_differ_inside_a_stretch_without_a_second_timeline(hass, coordinator):
+    plan = {
+        "name": "Shabbat",
+        "groups": [{
+            "name": "home",
+            "devices": ["light.salon", "switch.plata"],
+            "cubes": [{
+                "name": "morning", "from": "havdalah@06:30", "to": "havdalah@13:00",
+                "state": "on", "brightness": 60,
+                "overrides": [{"device": "switch.plata", "state": "off"}],
+            }],
+        }],
+    }
+    result = call(SavePlanTool, hass, plan=plan)
+
+    assert result["ok"]
+    slots = coordinator.writes[-1][1][const.ATTR_TIMESLOTS]
+    assert len(slots) == 1  # one stretch, not one per device
+    by_device = {a["entity_id"]: a for a in slots[0][const.ATTR_ACTIONS]}
+    assert by_device["light.salon"]["service"] == "light.turn_on"
+    assert by_device["light.salon"]["service_data"]["brightness_pct"] == 60
+    assert by_device["switch.plata"]["service"] == "switch.turn_off"
+
+
+def test_a_plan_with_a_device_in_two_groups_is_refused(hass, coordinator):
+    result = call(SavePlanTool, hass, plan={
+        "name": "x",
+        "groups": [
+            {"name": "a", "devices": ["light.salon"], "cubes": [
+                {"from": "candle_lighting", "to": "havdalah"}]},
+            {"name": "b", "devices": ["light.salon"], "cubes": [
+                {"from": "candle_lighting", "to": "havdalah"}]},
+        ],
+    })
+
+    assert result["ok"] is False
+    assert "in both" in result["error"] and "override" in result["error"]
+    assert coordinator.writes == []
+
+
+def test_holding_a_state_reaches_the_stored_slot(hass, coordinator):
+    result = call(SavePlanTool, hass, plan={
+        "name": "x",
+        "groups": [{"name": "home", "devices": ["light.salon"], "cubes": [
+            {"name": "n", "from": "candle_lighting", "to": "havdalah", "enforce": True}]}],
+    })
+
+    assert result["ok"]
+    assert coordinator.writes[-1][1][const.ATTR_TIMESLOTS][0][const.ATTR_ENFORCE] is True
 
 
 def test_reading_a_plan_back_gives_what_save_accepts(hass, coordinator):

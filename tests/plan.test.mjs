@@ -216,6 +216,106 @@ export default async function run() {
     s.ok(call.data.timeslots[0].color === '#8e24aa', 'a colour chosen for a stretch is saved with it');
   }, JERUSALEM);
 
+  // --- one device differing inside a stretch -------------------------------
+  //
+  // Without this, giving the hotplate a different state in one stretch means
+  // duplicating the whole timeline for it, which is the thing tracks exist to
+  // avoid in the first place.
+
+  await withPage(page(), async p => {
+    const call = await saveWith(p, `
+      const group = dialog._plan.groups[0];
+      dialog._toggleOverride(group, group.cubes[0], 'switch.plata');
+    `);
+
+    const slot = call.data.timeslots[0];
+    const byDevice = Object.fromEntries(slot.actions.map(a => [a.entity_id, a.service]));
+    s.ok(byDevice['light.salon'] === 'switch.turn_on', 'the group keeps doing what it did');
+    s.ok(byDevice['switch.plata'] === 'switch.turn_off', 'and the one device does the opposite');
+    s.ok(new Set(call.data.timeslots.map(e => e.track)).size === 1,
+      'still one track: nothing was duplicated for the odd one out');
+    s.ok(call.data.timeslots[1].actions.every(a => a.service === 'switch.turn_off'),
+      'the other stretches are untouched by it');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const flipped = await p.evaluate(() => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon', 'switch.plata']);
+      const group = dialog._plan.groups[0];
+      dialog._toggleOverride(group, group.cubes[0], 'switch.plata');
+      const on = Object.keys(dialog._plan.groups[0].cubes[0].overrides || {});
+      dialog._toggleOverride(dialog._plan.groups[0], dialog._plan.groups[0].cubes[0], 'switch.plata');
+      return { on, off: Object.keys(dialog._plan.groups[0].cubes[0].overrides || {}) };
+    });
+
+    s.ok(flipped.on.length === 1, 'a device can be made to differ');
+    s.ok(flipped.off.length === 0, 'and put back with its group in one click');
+  }, JERUSALEM);
+
+  await withPage(page({ schedule: null }), async p => {
+    const read = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon', 'light.hallway', 'switch.plata']);
+      const group = dialog._plan.groups[0];
+      dialog._toggleOverride(group, group.cubes[0], 'switch.plata');
+      await dialog._save();
+      const written = (window.__apiCalls || []).slice(-1)[0].data;
+      // reopen on what was written
+      const { planFromSchedule } = window.__planModel || {};
+      return written.timeslots[0].actions.map(a => `${a.entity_id}=${a.service}`).sort();
+    });
+
+    s.ok(read.join() === 'light.hallway=switch.turn_on,light.salon=switch.turn_on,switch.plata=switch.turn_off',
+      'every device is written out with its own action');
+  }, JERUSALEM);
+
+  // --- brightness and colour ----------------------------------------------
+
+  await withPage(page(), async p => {
+    const call = await saveWith(p, `
+      const group = dialog._plan.groups[0];
+      const cube = group.cubes[0];
+      dialog._updateCube(group.track, cube.id, {
+        action: { ...cube.action, service: 'light.turn_on',
+                  service_data: { brightness_pct: 35, color_temp_kelvin: 2200 } },
+      });
+    `);
+
+    const data = call.data.timeslots[0].actions[0].service_data;
+    s.ok(data.brightness_pct === 35, 'brightness reaches the service call');
+    s.ok(data.color_temp_kelvin === 2200, 'so does the colour temperature');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const drawn = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const group = dialog._plan.groups[0];
+      const cube = group.cubes[0];
+      dialog._updateCube(group.track, cube.id, {
+        action: { ...cube.action, service: 'light.turn_on', service_data: { brightness_pct: 20 } },
+      });
+      await dialog.updateComplete;
+      const el = [...dialog.shadowRoot.querySelectorAll('.cube')][0];
+      return el.getAttribute('style');
+    });
+
+    s.ok(/background:rgba\(/.test(drawn),
+      'a dimmed stretch is drawn dim, the way the ordinary bar colours a slot');
+  }, JERUSALEM);
+
+  // --- holding a device to what was set ------------------------------------
+
+  await withPage(page(), async p => {
+    const call = await saveWith(p, `
+      const group = dialog._plan.groups[0];
+      dialog._updateCube(group.track, group.cubes[0].id, { enforce: true });
+    `);
+
+    s.ok(call.data.timeslots[0].enforce === true, 'the hold is saved with the stretch');
+    s.ok(!call.data.timeslots[1].enforce, 'and only for the stretch it was set on');
+  }, JERUSALEM);
+
   // --- the wizard is a way in, not the only way ---------------------------
 
   await withPage(page(), async p => {

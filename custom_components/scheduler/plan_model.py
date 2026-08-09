@@ -13,7 +13,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .plan_times import DEFAULT_ANCHORS, TimeError, from_engine, parse_time, to_engine, warn_about
+from .plan_times import (
+    CANDLE_LIGHTING,
+    DEFAULT_ANCHORS,
+    HAVDALAH,
+    TimeError,
+    from_engine,
+    parse_time,
+    to_engine,
+    warn_about,
+)
 
 PLAN_TAG = "shabbat-plan"
 GROUP_PREFIX = "group:"
@@ -29,14 +38,52 @@ class PlanError(ValueError):
 
 
 @dataclass
+class DeviceState:
+    """What one device is asked to do: on or off, and how brightly.
+
+    `brightness` is a percentage and `kelvin` a colour temperature - warm at
+    around 2200, daylight at around 6500. Both only mean anything for a light
+    being turned on, and both are left out of the service call when unset.
+    """
+
+    state: str = ON
+    brightness: int | None = None
+    kelvin: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"state": self.state}
+        if self.brightness is not None:
+            out["brightness"] = self.brightness
+        if self.kelvin is not None:
+            out["kelvin"] = self.kelvin
+        return out
+
+
+@dataclass
 class Cube:
-    """One stretch of the band: a name, two boundaries, and a state."""
+    """One stretch of the band: a name, two boundaries, and what devices do.
+
+    `state` is what the group does. `overrides` is how one device differs
+    without the whole timeline having to be duplicated for it - the group's
+    lights on while its hotplate stays off, in the very same stretch.
+    """
 
     name: str
     start: str
     stop: str
     state: str = ON
     color: str | None = None
+    brightness: int | None = None
+    kelvin: int | None = None
+    #: entity id -> what that one device does instead
+    overrides: dict[str, DeviceState] = field(default_factory=dict)
+    #: put the devices back if something else moves them during this stretch
+    enforce: bool = False
+
+    def for_device(self, device: str) -> DeviceState:
+        return self.overrides.get(
+            device, DeviceState(self.state, self.brightness, self.kelvin)
+        )
 
 
 @dataclass
@@ -57,7 +104,10 @@ class PlanException:
     stop: str
     name: str = "exception"
     state: str = ON
+    brightness: int | None = None
+    kelvin: int | None = None
     only_on: str | None = None
+    enforce: bool = False
 
 
 @dataclass
@@ -79,7 +129,78 @@ def _state_of(service: str) -> str:
     return OFF if service.endswith("turn_off") else ON
 
 
+def _action_for(device: str, wanted: DeviceState) -> dict[str, Any]:
+    """The service call one device gets for one stretch."""
+    service_data: dict[str, Any] = {}
+    # brightness and colour only mean anything on the way on
+    if wanted.state == ON:
+        if wanted.brightness is not None:
+            service_data["brightness_pct"] = wanted.brightness
+        if wanted.kelvin is not None:
+            service_data["color_temp_kelvin"] = wanted.kelvin
+    return {
+        "service": _service(device, wanted.state),
+        "entity_id": device,
+        "service_data": service_data,
+    }
+
+
+def _device_state_of(action: dict[str, Any]) -> DeviceState:
+    service_data = action.get("service_data") or {}
+    kelvin = service_data.get("color_temp_kelvin")
+    brightness = service_data.get("brightness_pct")
+    if brightness is None and service_data.get("brightness") is not None:
+        brightness = round(float(service_data["brightness"]) / 255 * 100)
+    return DeviceState(
+        state=_state_of(action.get("service", "")),
+        brightness=int(brightness) if brightness is not None else None,
+        kelvin=int(kelvin) if kelvin is not None else None,
+    )
+
+
 # --- reading a plan out of a stored schedule --------------------------------
+
+
+def _key(wanted: DeviceState):
+    return (wanted.state, wanted.brightness, wanted.kelvin)
+
+
+def _cube_from_slot(slot: dict[str, Any], anchors: dict[str, str]) -> Cube:
+    """Read a stretch back, telling the group's state from a device's own.
+
+    The slot carries one action per device. Whatever most of them are doing is
+    the stretch's state; a device doing something else is an override, which is
+    how one device differs inside a stretch without the timeline being copied.
+    """
+    per_device = {
+        action["entity_id"]: _device_state_of(action)
+        for action in slot.get("actions", [])
+        if action.get("entity_id")
+    }
+
+    common = DeviceState(_state_of(slot["actions"][0].get("service", "")))
+    if per_device:
+        tally: dict[tuple, int] = {}
+        for wanted in per_device.values():
+            tally[_key(wanted)] = tally.get(_key(wanted), 0) + 1
+        winner = max(tally, key=lambda k: tally[k])
+        common = next(w for w in per_device.values() if _key(w) == winner)
+
+    return Cube(
+        name=slot.get("name") or "",
+        start=from_engine(slot.get("start", ""), anchors),
+        stop=from_engine(slot.get("stop") or slot.get("start", ""), anchors),
+        state=common.state,
+        brightness=common.brightness,
+        kelvin=common.kelvin,
+        color=slot.get("color"),
+        enforce=bool(slot.get("enforce")),
+        overrides={
+            device: wanted
+            for device, wanted in per_device.items()
+            if _key(wanted) != _key(common)
+        },
+    )
 
 
 def plan_from_schedule(schedule: dict[str, Any], anchors: dict[str, str] | None = None) -> Plan:
@@ -120,16 +241,7 @@ def plan_from_schedule(schedule: dict[str, Any], anchors: dict[str, str] | None 
             Group(
                 name=track[len(GROUP_PREFIX):] if track.startswith(GROUP_PREFIX) else track,
                 devices=devices,
-                cubes=[
-                    Cube(
-                        name=slot.get("name") or "",
-                        start=from_engine(slot.get("start", ""), anchors),
-                        stop=from_engine(slot.get("stop") or slot.get("start", ""), anchors),
-                        state=_state_of(slot["actions"][0].get("service", "")),
-                        color=slot.get("color"),
-                    )
-                    for slot in track_slots
-                ],
+                cubes=[_cube_from_slot(slot, anchors) for slot in track_slots],
             )
         )
 
@@ -164,12 +276,11 @@ def plan_to_timeslots(plan: Plan) -> list[dict[str, Any]]:
                     "color": cube.color,
                     "track": track,
                     "priority": 0,
+                    "enforce": cube.enforce,
+                    # one action per device, so a device can differ inside the
+                    # stretch without the stretch being copied for it
                     "actions": [
-                        {
-                            "service": _service(device, cube.state),
-                            "entity_id": device,
-                            "service_data": {},
-                        }
+                        _action_for(device, cube.for_device(device))
                         for device in group.devices
                     ],
                     **_empty_conditions(),
@@ -181,7 +292,10 @@ def plan_to_timeslots(plan: Plan) -> list[dict[str, Any]]:
         index = seen.get(exception.device, 0)
         seen[exception.device] = index + 1
         # a track of its own, ranked above the group: that is what makes the
-        # group leave this device alone until the exception ends
+        # group leave this device alone until the exception ends. A device may
+        # have several exceptions at different times; ranking later ones higher
+        # means that if two ever did overlap, the later one wins outright
+        # instead of it depending on the order they were saved in.
         track = f"{DETACH_PREFIX}{exception.device}" + (f"#{index}" if index else "")
         slots.append(
             {
@@ -189,15 +303,15 @@ def plan_to_timeslots(plan: Plan) -> list[dict[str, Any]]:
                 "stop": to_engine(exception.stop, plan.anchors),
                 "name": exception.name or None,
                 "track": track,
-                "priority": DETACH_PRIORITY,
+                "priority": DETACH_PRIORITY + index,
                 "start_date": exception.only_on,
                 "end_date": exception.only_on,
+                "enforce": exception.enforce,
                 "actions": [
-                    {
-                        "service": _service(exception.device, exception.state),
-                        "entity_id": exception.device,
-                        "service_data": {},
-                    }
+                    _action_for(
+                        exception.device,
+                        DeviceState(exception.state, exception.brightness, exception.kelvin),
+                    )
                 ],
                 **_empty_conditions(),
             }
@@ -250,23 +364,95 @@ def validate(plan: Plan) -> None:
                 "{'name': ..., 'from': 'candle_lighting', 'to': 'havdalah', 'state': 'on'}."
             )
         for cube in group.cubes:
-            _check_boundary(cube.start, f"group '{group.name}', stretch '{cube.name}'", "from")
-            _check_boundary(cube.stop, f"group '{group.name}', stretch '{cube.name}'", "to")
+            where = f"group '{group.name}', stretch '{cube.name}'"
+            _check_boundary(cube.start, where, "from")
+            _check_boundary(cube.stop, where, "to")
+            _check_parameters(cube, where)
             if cube.state not in (ON, OFF):
                 raise PlanError(
                     f"Stretch '{cube.name}' has state '{cube.state}'. Use '{ON}' or '{OFF}'."
                 )
+            for device, wanted in cube.overrides.items():
+                if device not in group.devices:
+                    raise PlanError(
+                        f"{where}: there is an override for '{device}', but it is not in "
+                        f"'{group.name}'. An override is one of the group's own devices "
+                        "doing something different in this stretch."
+                    )
+                if wanted.state not in (ON, OFF):
+                    raise PlanError(
+                        f"{where}: the override for '{device}' has state "
+                        f"'{wanted.state}'. Use '{ON}' or '{OFF}'."
+                    )
+                _check_parameters(wanted, f"{where}, override for '{device}'")
+        _check_overlaps(group)
+
+    _check_no_device_in_two_groups(plan)
 
     known = {device for group in plan.groups for device in group.devices}
     for exception in plan.exceptions:
         _check_boundary(exception.start, f"exception for {exception.device}", "from")
         _check_boundary(exception.stop, f"exception for {exception.device}", "to")
+        _check_parameters(exception, f"exception for {exception.device}")
         if exception.device not in known:
             raise PlanError(
                 f"'{exception.device}' is not in any group, so there is nothing for it "
                 "to be an exception to. Add it to a group's devices first - an "
                 "exception takes a device off its group for a while and gives it back."
             )
+
+
+def _check_no_device_in_two_groups(plan: Plan) -> None:
+    """Two groups both driving a device would each be setting it at once."""
+    owner: dict[str, str] = {}
+    for group in plan.groups:
+        for device in group.devices:
+            if device in owner and owner[device] != group.name:
+                raise PlanError(
+                    f"'{device}' is in both '{owner[device]}' and '{group.name}'. Two "
+                    "groups would be setting it at the same time. Put it in one group "
+                    "and, if it needs to differ in a stretch, give that stretch an "
+                    "override for it."
+                )
+            owner[device] = group.name
+
+
+def _check_overlaps(group: Group) -> None:
+    """Stretches on one row share a timeline, so they must not collide.
+
+    Only what can be told without a clock is an error here: two stretches
+    starting at the same moment, or one that ends where it began. Whether a
+    stretch actually overlaps the next depends on the anchors, which are not
+    known until the plan runs - `warnings_for` raises the softer cases.
+    """
+    starts: dict[str, str] = {}
+    for index, cube in enumerate(group.cubes):
+        label = cube.name or f"#{index + 1}"
+        if cube.start == cube.stop:
+            raise PlanError(
+                f"In group '{group.name}', '{label}' starts and ends at the same moment "
+                f"('{cube.start}'), so it covers nothing."
+            )
+        if cube.start in starts:
+            raise PlanError(
+                f"In group '{group.name}', '{label}' and '{starts[cube.start]}' both "
+                f"start at '{cube.start}'. Two stretches on one row cannot begin "
+                "together - which of them applied would depend on the order they "
+                "happened to be saved in."
+            )
+        starts[cube.start] = label
+
+
+def _check_parameters(item: Cube | PlanException | DeviceState, where: str) -> None:
+    brightness = getattr(item, "brightness", None)
+    kelvin = getattr(item, "kelvin", None)
+    if brightness is not None and not 1 <= brightness <= 100:
+        raise PlanError(f"{where}: brightness is a percentage, 1 to 100, not {brightness}.")
+    if kelvin is not None and not 1500 <= kelvin <= 8000:
+        raise PlanError(
+            f"{where}: kelvin is a colour temperature, roughly 2200 (warm) to 6500 "
+            f"(daylight), not {kelvin}."
+        )
 
 
 def _check_boundary(expression: str, where: str, field_name: str) -> None:
@@ -290,10 +476,39 @@ def warnings_for(plan: Plan) -> list[str]:
             note = warn_about(expression, plan.anchors)
             if note and note not in notes:
                 notes.append(note)
+
+    # a gap is legal - the devices simply hold what they had - but it is far
+    # more often a stretch somebody meant to join up to the next one
+    for group in plan.groups:
+        for cube, following in zip(group.cubes, group.cubes[1:]):
+            if cube.stop != following.start:
+                notes.append(
+                    f"In '{group.name}', '{cube.name or 'a stretch'}' ends at "
+                    f"'{cube.stop}' and the next begins at '{following.start}'. "
+                    "Nothing is set in between, so the devices stay as they were."
+                )
+
+    shabbat_only = [a for a in plan.anchors.values() if "upcoming_shabbat_" in a]
+    if shabbat_only:
+        notes.append(
+            f"{', '.join(shabbat_only)} only covers Shabbat. Use "
+            f"{DEFAULT_ANCHORS[CANDLE_LIGHTING]} and {DEFAULT_ANCHORS[HAVDALAH]}, which "
+            "also cover Yom Tov - including a festival running into Shabbat."
+        )
     return notes
 
 
 # --- the shape the tools speak ----------------------------------------------
+
+
+def _require_device(override: dict[str, Any]) -> bool:
+    if not override.get("device"):
+        raise PlanError(
+            "An override needs 'device' - the entity that differs from the rest of its "
+            "group in this stretch, e.g. "
+            "{'device': 'switch.plata', 'state': 'off'}."
+        )
+    return True
 
 
 def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) -> Plan:
@@ -318,7 +533,19 @@ def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) 
                     start=cube["from"],
                     stop=cube["to"],
                     state=cube.get("state", ON),
+                    brightness=cube.get("brightness"),
+                    kelvin=cube.get("kelvin"),
                     color=cube.get("color"),
+                    enforce=bool(cube.get("enforce")),
+                    overrides={
+                        override["device"]: DeviceState(
+                            state=override.get("state", ON),
+                            brightness=override.get("brightness"),
+                            kelvin=override.get("kelvin"),
+                        )
+                        for override in (cube.get("overrides") or [])
+                        if _require_device(override)
+                    },
                 )
             )
         groups.append(
@@ -336,7 +563,10 @@ def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) 
                 start=raw.get("from") or "",
                 stop=raw.get("to") or "",
                 state=raw.get("state", ON),
+                brightness=raw.get("brightness"),
+                kelvin=raw.get("kelvin"),
                 only_on=raw.get("only_on"),
+                enforce=bool(raw.get("enforce")),
             )
         )
 
@@ -361,7 +591,20 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                         "from": cube.start,
                         "to": cube.stop,
                         "state": cube.state,
+                        **({"brightness": cube.brightness} if cube.brightness is not None else {}),
+                        **({"kelvin": cube.kelvin} if cube.kelvin is not None else {}),
                         **({"color": cube.color} if cube.color else {}),
+                        **({"enforce": True} if cube.enforce else {}),
+                        **(
+                            {
+                                "overrides": [
+                                    {"device": device, **wanted.as_dict()}
+                                    for device, wanted in cube.overrides.items()
+                                ]
+                            }
+                            if cube.overrides
+                            else {}
+                        ),
                     }
                     for cube in group.cubes
                 ],
@@ -375,7 +618,10 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                 "from": exception.start,
                 "to": exception.stop,
                 "state": exception.state,
+                **({"brightness": exception.brightness} if exception.brightness is not None else {}),
+                **({"kelvin": exception.kelvin} if exception.kelvin is not None else {}),
                 **({"only_on": exception.only_on} if exception.only_on else {}),
+                **({"enforce": True} if exception.enforce else {}),
             }
             for exception in plan.exceptions
         ],

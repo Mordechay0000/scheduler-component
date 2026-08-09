@@ -1,5 +1,6 @@
 import logging
 
+import homeassistant.util.dt as dt_util
 from homeassistant.core import (
     HomeAssistant,
     callback,
@@ -16,7 +17,8 @@ from homeassistant.const import (
     CONF_CONDITIONS,
     CONF_ATTRIBUTE,
     CONF_STATE,
-    CONF_ACTION
+    CONF_ACTION,
+    STATE_OFF,
 )
 from homeassistant.components.climate import (
     SERVICE_SET_TEMPERATURE,
@@ -44,6 +46,21 @@ _LOGGER = logging.getLogger(__name__)
 
 ACTION_WAIT = "wait"
 ACTION_WAIT_STATE_CHANGE = "wait_state_change"
+
+# How long to leave an enforced entity alone after putting it back. Something
+# else is moving it, and if that something else moves it straight back we would
+# otherwise trade service calls with it several times a second.
+ENFORCE_COOLDOWN = 30
+
+#: service data keys that name an attribute the action is asking for
+ENFORCED_ATTRIBUTES = {
+    "brightness": "brightness",
+    "color_temp_kelvin": "color_temp_kelvin",
+    ATTR_HVAC_MODE: None,  # hvac_mode is the state, not an attribute
+    ATTR_TEMPERATURE: ATTR_TEMPERATURE,
+    ATTR_TARGET_TEMP_LOW: ATTR_TARGET_TEMP_LOW,
+    ATTR_TARGET_TEMP_HIGH: ATTR_TARGET_TEMP_HIGH,
+}
 
 
 def parse_service_call(data: dict):
@@ -189,6 +206,56 @@ def validate_condition(hass: HomeAssistant, condition: dict, *args):
     return result
 
 
+def state_matches_action(hass: HomeAssistant, action: dict) -> bool:
+    """Is the entity already doing what this action asks for?
+
+    Only used for enforcement, where the question is whether something else has
+    moved the entity away from what the schedule set. It is deliberately
+    conservative: anything it cannot compare counts as a match, so an action it
+    does not understand is never re-sent in a loop.
+    """
+    if ATTR_ENTITY_ID not in action or not action[ATTR_ENTITY_ID]:
+        return True
+
+    state = hass.states.get(action[ATTR_ENTITY_ID])
+    if state is None or state.state in [STATE_UNAVAILABLE, STATE_UNKNOWN]:
+        # nothing to compare against, and nothing worth shouting at
+        return True
+
+    service = action[CONF_ACTION].split(".").pop()
+    service_data = action.get(CONF_SERVICE_DATA) or {}
+
+    if service == "turn_on" and state.state == STATE_OFF:
+        return False
+    if service == "turn_off":
+        return state.state == STATE_OFF
+    if service == SERVICE_SET_HVAC_MODE and ATTR_HVAC_MODE in service_data:
+        return state.state == service_data[ATTR_HVAC_MODE]
+    if ATTR_HVAC_MODE in service_data and state.state != service_data[ATTR_HVAC_MODE]:
+        return False
+
+    # brightness may be asked for as a percentage but is reported 0-255
+    if "brightness_pct" in service_data and state.attributes.get("brightness") is not None:
+        wanted = float(service_data["brightness_pct"])
+        actual = float(state.attributes["brightness"]) / 255 * 100
+        if abs(actual - wanted) > 2:
+            return False
+
+    for key, attribute in ENFORCED_ATTRIBUTES.items():
+        if attribute is None or key not in service_data:
+            continue
+        wanted = service_data[key]
+        actual = state.attributes.get(attribute)
+        if actual is None or not isinstance(wanted, (int, float)):
+            continue
+        # a bulb rarely lands on the exact number it was asked for
+        tolerance = 3 if attribute == "brightness" else (60 if "kelvin" in attribute else 0.6)
+        if abs(float(actual) - float(wanted)) > tolerance:
+            return False
+
+    return True
+
+
 def action_has_effect(action: dict, hass: HomeAssistant):
     """check if action has an effect on the entity"""
     if ATTR_ENTITY_ID not in action:
@@ -258,6 +325,7 @@ class ActionHandler:
         actions = [e for x in data[const.ATTR_ACTIONS] for e in parse_service_call(x)]
         condition_type = data[const.ATTR_CONDITION_TYPE]
         track_conditions = data[const.ATTR_TRACK_CONDITIONS]
+        enforce = bool(data.get(const.ATTR_ENFORCE))
         excluded = set(exclude_entities or [])
 
         # create an ActionQueue object per targeted entity (such that the tasks are handled independently)
@@ -275,7 +343,7 @@ class ActionHandler:
             key = (track, entity)
             if key not in self._queues:
                 self._queues[key] = ActionQueue(
-                    self.hass, self.id, conditions, condition_type, track_conditions
+                    self.hass, self.id, conditions, condition_type, track_conditions, enforce
                 )
 
             self._queues[key].add_action(action)
@@ -293,6 +361,9 @@ class ActionHandler:
         # or have all their entities available (i.e. conditions have failed beforee)
         queue_items = list(self._queues.keys())
         for key in queue_items:
+            if self._queues[key].is_enforcing():
+                # it is still holding an entity to what the slot asked for
+                continue
             if self._queues[key].is_finished() or (
                 self._queues[key].is_available() and not self._queues[key].queue_busy
             ):
@@ -344,6 +415,7 @@ class ActionQueue:
         conditions: list,
         condition_type: str,
         track_conditions: bool,
+        enforce: bool = False,
     ):
         """create a new action queue"""
         self.hass = hass
@@ -359,6 +431,10 @@ class ActionQueue:
         self.queue_busy = False
         self._track_conditions = track_conditions
         self._wait_for_available = True
+        self._enforce = enforce
+        self._enforced_actions = []
+        self._enforce_timer = None
+        self._last_enforced = None
 
         for condition in conditions:
             if (
@@ -393,6 +469,11 @@ class ActionQueue:
                 return
 
             if self.queue_busy:
+                return
+
+            if self._enforce and entity in self._action_entities:
+                # something else moved a device the schedule is holding
+                await self.async_enforce(entity)
                 return
 
             if entity not in self._condition_entities and not self._wait_for_available:
@@ -443,11 +524,53 @@ class ActionQueue:
         else:
             self._wait_for_available = False
 
+    async def async_enforce(self, entity: str):
+        """put an entity back to what the schedule set for it
+
+        Experimental, and deliberately timid: it only acts on what it can
+        compare, and never twice within the cooldown, so if something else is
+        pushing the other way the two do not trade service calls in a loop.
+        """
+        actions = [
+            action
+            for action in self._enforced_actions
+            if action.get(ATTR_ENTITY_ID) == entity
+        ]
+        if not actions or all(state_matches_action(self.hass, a) for a in actions):
+            return
+
+        now = dt_util.utcnow()
+        elapsed = (now - self._last_enforced).total_seconds() if self._last_enforced else None
+        if elapsed is not None and elapsed < ENFORCE_COOLDOWN:
+            if self._enforce_timer is None:
+
+                @callback
+                async def async_retry(_now):
+                    self._enforce_timer = None
+                    await self.async_enforce(entity)
+
+                self._enforce_timer = async_call_later(
+                    self.hass, ENFORCE_COOLDOWN - elapsed, async_retry
+                )
+            return
+
+        self._last_enforced = now
+        _LOGGER.debug(
+            "[{}]: {} was changed by something else, restoring it".format(self.id, entity)
+        )
+        for action in actions:
+            await async_call_from_config(self.hass, action)
+
     async def async_clear(self):
         """clear action queue object"""
         if self._timer:
             self._timer()
         self._timer = None
+
+        if self._enforce_timer:
+            self._enforce_timer()
+        self._enforce_timer = None
+        self._enforced_actions = []
 
         while len(self._listeners):
             self._listeners.pop()()
@@ -459,6 +582,10 @@ class ActionQueue:
     def is_finished(self):
         """check whether all queue items are finished"""
         return len(self._queue) == 0
+
+    def is_enforcing(self):
+        """whether this queue is still holding its entities to the slot's state"""
+        return self._enforce and bool(self._enforced_actions)
 
     def is_available(self):
         """check if all actions and entities involved in the task are available"""
@@ -640,6 +767,16 @@ class ActionQueue:
                     task,
                 )
             task_idx = task_idx + 1
+
+        if self._enforce:
+            # remember what was asked for, so it can be asked for again if
+            # something else moves the entity while this slot is still running
+            self._enforced_actions = [
+                task
+                for task in self._queue
+                if task[CONF_ACTION] not in [ACTION_WAIT, ACTION_WAIT_STATE_CHANGE]
+                and task.get(ATTR_ENTITY_ID)
+            ]
 
         self.queue_busy = False
 

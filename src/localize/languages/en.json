@@ -398,6 +398,28 @@
             "body": "Read it through. Anything here can still be changed in the editor afterwards.",
             "outside": "{names} falls outside the band and was left out. Shabbat evening times must be after candle lighting, and Shabbat day times before havdalah."
           }
+        },
+        "override": {
+          "label": "Devices in this stretch",
+          "hint": "Click a device to make it do the opposite here. It stays in the group and follows it again in every other stretch.",
+          "flip": "make this one differ here",
+          "back": "back with the group"
+        },
+        "light": {
+          "brightness": "Brightness",
+          "warmth": "Colour",
+          "set": "set",
+          "clear": "leave as is",
+          "warm": "warm",
+          "neutral": "neutral",
+          "cool": "daylight"
+        },
+        "enforce": {
+          "label": "Hold this state",
+          "beta": "experimental",
+          "on": "Hold",
+          "off": "Don't hold",
+          "hint": "If a wall switch or another integration changes a device during this stretch, put it back. Waits 30 seconds between attempts so it cannot end up fighting whatever moved it."
         }
       }
     }

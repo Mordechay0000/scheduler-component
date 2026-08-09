@@ -114,8 +114,32 @@ It rests on three things the engine can do that a plain schedule does not need:
   leaves that device alone, including across a restart; when it ends, the group
   takes the device back.
 
-All three are ordinary schedule features, usable from `scheduler.add` and
+Inside a stretch, individual devices can differ without the timeline being
+copied for them: the group's lights on while its hotplate stays off, in the very
+same stretch. That is an **override** — the device stays in the group and
+follows it everywhere else. Reach for an **exception** only when a device needs
+its own *hours*, not just its own state.
+
+Lights can also be given a **brightness** and a **colour temperature** (warm
+through daylight), per stretch or per override; the stretch is then drawn in the
+colour the bulb will actually show, the same way the ordinary time bar tints a
+slot.
+
+**Holding a state** (experimental) is `enforce` on a stretch: if a wall switch or
+another integration moves a device while that stretch is running, the engine puts
+it back — for the switch pressed by accident on Shabbat. It waits 30 seconds
+between attempts, so it cannot end up trading service calls with whatever moved
+the device, and it only acts on what it can actually compare.
+
+All of these are ordinary schedule features, usable from `scheduler.add` and
 `scheduler.edit` without the plan editor.
+
+**A note on the anchors.** Home Assistant's Jewish Calendar has two pairs of
+sensors and only one is right here. `upcoming_candle_lighting` and
+`upcoming_havdalah` are built on *upcoming Shabbat **or Yom Tov***, so a plan
+using them opens on a festival that starts on a Thursday and closes at the end of
+a three-day run. The `upcoming_shabbat_*` pair is Shabbat-only and misses every
+festival; the plan warns if it finds them.
 
 **Not sure where to start?** The editor offers a guided path in plain language:
 pick the devices, say what happens when Shabbat comes in, then build the day out
@@ -200,6 +224,10 @@ If you want to make a donation as appreciation of the work on this project, you 
 * **עוגן מבוסס-ישות** – זמן הלכתי אינו היסט קבוע מהשקיעה האסטרונומית, ולכן הוא נקרא מהישות מחדש בכל הפעלה. למשל `sensor.jewish_calendar_upcoming_candle_lighting-00:18:00`. נדרשת אינטגרציית [Jewish Calendar](https://www.home-assistant.io/integrations/jewish_calendar/).
 * **שעה קבועה ביום של עוגן** – `‎…upcoming_havdalah@06:30:00` היא 06:30 בבוקר שבו הפס נגמר, יהיה זה איזה יום שיהיה. כך הגבולות הפנימיים נשארים בתוך הפס גם ביום טוב, שאף כלל ימים בשבוע לא יכול לתאר.
 * **מסלולים עצמאיים** – לכל קבוצה מחיצת זמנים משלה, ולכן גבול שנועד למכשיר אחד אינו מפצל את השאר. מכשיר שמתנתק מקבל מסלול בעדיפות גבוהה יותר: כל עוד הניתוק פועל הקבוצה לא נוגעת בו (גם אחרי הפעלה מחדש), וכשהוא נגמר הקבוצה מחזירה אותו אליה.
+* **חריגים בתוך קובייה** – בתוך אותה קובייה אפשר לתת למכשיר בודד מצב שונה בלי לשכפל את קו הזמן: התאורה של הקבוצה דלוקה והפלטה כבויה, באותו קטע בדיוק. המכשיר נשאר בקבוצה וממשיך לעקוב אחריה בכל שאר הקוביות. ״ניתוק״ שמור למקרה שהמכשיר צריך *שעות* משלו, לא רק מצב.
+* **בהירות וגוון** – לתאורה אפשר לקבוע אחוז בהירות וטמפרטורת צבע (מחמים ועד אור יום), לקובייה שלמה או למכשיר בודד בתוכה. הקובייה נצבעת בצבע שהנורה תראה בפועל.
+* **שמירה על המצב (ניסיוני)** – אם מפסק בקיר או אינטגרציה אחרת משנים מכשיר במהלך הקובייה, המנוע מחזיר אותו למצב שהוגדר. ממתין 30 שניות בין ניסיונות כדי לא להיכנס להתגוששות, ופועל רק על מה שהוא באמת יכול להשוות.
+* **העוגנים מכסים גם חג** – `upcoming_candle_lighting` ו-`upcoming_havdalah` בנויים על ״שבת **או יום טוב** הקרובים״, ולכן הפס נפתח גם בחג שנופל ביום חמישי ונסגר בסוף רצף של שלושה ימים. הזוג `upcoming_shabbat_*` הוא לשבת בלבד ומפספס כל חג — התוכנית מזהירה אם הוא בשימוש.
 * **אשף מודרך** – בוחרים מכשירים, קובעים מה קורה בכניסת שבת, ואז בונים את היום מזמנים עם שמות: סעודת ליל שבת, שינה, בוקר, סעודת שבת, שנת צהריים — או כל זמן אחר שמוסיפים. כל זמן קובע מה קורה ממנו ועד הבא אחריו, ובסוף האשף מקריא את היום כולו לבדיקה לפני שהוא בונה משהו. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
 * **תמיכה במודלי שפה** – האינטגרציה רושמת LLM API בשם ״Shabbat plans״, ולכן אין שרת נפרד להריץ. Home Assistant מגיש אותו גם דרך אינטגרציית [MCP Server](https://www.home-assistant.io/integrations/mcp_server/) בכתובת `/api/mcp/scheduler_shabbat`, וגם ל-Assist ולכל סוכן שיחה (Anthropic, OpenAI, Google, Ollama). הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
 

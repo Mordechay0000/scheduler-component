@@ -209,6 +209,280 @@ def test_two_exceptions_on_one_device_get_their_own_tracks():
     assert len(set(tracks)) == 2
 
 
+# --- one device differing inside a stretch ----------------------------------
+#
+# The alternative would be duplicating the whole timeline for the one device
+# that needs a different state, which is exactly what tracks exist to avoid.
+
+
+def plan_with_override():
+    return plan_from_dict(
+        {
+            "name": "Shabbat",
+            "groups": [
+                {
+                    "name": "home",
+                    "devices": ["light.salon", "light.hallway", "switch.plata"],
+                    "cubes": [
+                        {
+                            "name": "night",
+                            "from": "candle_lighting",
+                            "to": "havdalah",
+                            "state": "on",
+                            "overrides": [{"device": "switch.plata", "state": "off"}],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def test_a_device_can_differ_without_a_row_of_its_own():
+    slot = plan_to_payload(plan_with_override())["timeslots"][0]
+    by_device = {a["entity_id"]: a["service"] for a in slot["actions"]}
+
+    assert by_device["light.salon"] == "light.turn_on"
+    assert by_device["light.hallway"] == "light.turn_on"
+    assert by_device["switch.plata"] == "switch.turn_off"
+    # one stretch, one track: nothing was duplicated for the odd one out
+    assert len({s["track"] for s in plan_to_payload(plan_with_override())["timeslots"]}) == 1
+
+
+def test_an_override_reads_back_as_an_override():
+    payload = plan_to_payload(plan_with_override())
+    stored = {"name": payload["name"], "timeslots": payload["timeslots"]}
+    cube = plan_to_dict(plan_from_schedule(stored))["groups"][0]["cubes"][0]
+
+    assert cube["state"] == "on"
+    assert cube["overrides"] == [{"device": "switch.plata", "state": "off"}]
+
+
+def test_the_majority_decides_which_way_round_it_is():
+    """Two off and one on reads as an off stretch with one device on."""
+    plan = plan_from_dict(
+        {
+            "name": "x",
+            "groups": [{
+                "name": "home",
+                "devices": ["light.a", "light.b", "light.c"],
+                "cubes": [{
+                    "name": "n", "from": "candle_lighting", "to": "havdalah", "state": "off",
+                    "overrides": [{"device": "light.c", "state": "on"}],
+                }],
+            }],
+        }
+    )
+    payload = plan_to_payload(plan)
+    read = plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]})
+
+    assert read.groups[0].cubes[0].state == "off"
+    assert list(read.groups[0].cubes[0].overrides) == ["light.c"]
+
+
+def test_an_override_for_a_device_outside_the_group_is_refused():
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(
+            plan_from_dict({
+                "name": "x",
+                "groups": [{
+                    "name": "home", "devices": ["light.a"],
+                    "cubes": [{
+                        "name": "n", "from": "candle_lighting", "to": "havdalah",
+                        "overrides": [{"device": "light.elsewhere", "state": "off"}],
+                    }],
+                }],
+            })
+        )
+    assert "not in 'home'" in str(err.value)
+
+
+# --- brightness and colour --------------------------------------------------
+
+
+def test_brightness_and_colour_reach_the_service_call():
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{
+            "name": "home", "devices": ["light.salon"],
+            "cubes": [{
+                "name": "evening", "from": "candle_lighting", "to": "havdalah",
+                "state": "on", "brightness": 40, "kelvin": 2200,
+            }],
+        }],
+    })
+    data = plan_to_payload(plan)["timeslots"][0]["actions"][0]["service_data"]
+
+    assert data == {"brightness_pct": 40, "color_temp_kelvin": 2200}
+
+
+def test_brightness_is_left_off_an_action_that_turns_something_off():
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{
+            "name": "home", "devices": ["light.salon"],
+            "cubes": [{
+                "name": "night", "from": "candle_lighting", "to": "havdalah",
+                "state": "off", "brightness": 40,
+            }],
+        }],
+    })
+    assert plan_to_payload(plan)["timeslots"][0]["actions"][0]["service_data"] == {}
+
+
+def test_brightness_and_colour_survive_a_round_trip():
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{
+            "name": "home", "devices": ["light.salon"],
+            "cubes": [{
+                "name": "evening", "from": "candle_lighting", "to": "havdalah",
+                "state": "on", "brightness": 40, "kelvin": 2200,
+            }],
+        }],
+    })
+    payload = plan_to_payload(plan)
+    cube = plan_to_dict(plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]}))
+    cube = cube["groups"][0]["cubes"][0]
+
+    assert (cube["brightness"], cube["kelvin"]) == (40, 2200)
+
+
+@pytest.mark.parametrize(
+    "field,value,expected_words",
+    [
+        ("brightness", 0, "a percentage, 1 to 100"),
+        ("brightness", 140, "a percentage, 1 to 100"),
+        ("kelvin", 100, "colour temperature"),
+        ("kelvin", 40000, "colour temperature"),
+    ],
+)
+def test_a_parameter_out_of_range_is_told_the_range(field, value, expected_words):
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(
+            plan_from_dict({
+                "name": "x",
+                "groups": [{
+                    "name": "home", "devices": ["light.a"],
+                    "cubes": [{
+                        "name": "n", "from": "candle_lighting", "to": "havdalah",
+                        "state": "on", field: value,
+                    }],
+                }],
+            })
+        )
+    assert expected_words in str(err.value)
+
+
+# --- holding a device to what was set ---------------------------------------
+
+
+def test_enforce_travels_with_the_stretch():
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{
+            "name": "home", "devices": ["light.a"],
+            "cubes": [{
+                "name": "n", "from": "candle_lighting", "to": "havdalah", "enforce": True,
+            }],
+        }],
+    })
+    payload = plan_to_payload(plan)
+
+    assert payload["timeslots"][0]["enforce"] is True
+    read = plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]})
+    assert read.groups[0].cubes[0].enforce is True
+
+
+def test_a_stretch_does_not_enforce_unless_asked():
+    assert plan_to_payload(worked_plan())["timeslots"][0]["enforce"] is False
+
+
+# --- conflicts --------------------------------------------------------------
+
+
+def test_a_device_cannot_be_in_two_groups():
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(
+            plan_from_dict({
+                "name": "x",
+                "groups": [
+                    {"name": "a", "devices": ["light.shared"], "cubes": [
+                        {"name": "n", "from": "candle_lighting", "to": "havdalah"}]},
+                    {"name": "b", "devices": ["light.shared"], "cubes": [
+                        {"name": "n", "from": "candle_lighting", "to": "havdalah"}]},
+                ],
+            })
+        )
+    message = str(err.value)
+    assert "in both 'a' and 'b'" in message
+    assert "override" in message  # and what to do instead
+
+
+def test_two_stretches_cannot_begin_together():
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(
+            plan_from_dict({
+                "name": "x",
+                "groups": [{"name": "home", "devices": ["light.a"], "cubes": [
+                    {"name": "one", "from": "havdalah@06:30", "to": "havdalah@08:00"},
+                    {"name": "two", "from": "havdalah@06:30", "to": "havdalah@09:00"},
+                ]}],
+            })
+        )
+    assert "both start at" in str(err.value)
+
+
+def test_a_stretch_that_covers_nothing_is_refused():
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(
+            plan_from_dict({
+                "name": "x",
+                "groups": [{"name": "home", "devices": ["light.a"], "cubes": [
+                    {"name": "n", "from": "havdalah@06:30", "to": "havdalah@06:30"}]}],
+            })
+        )
+    assert "covers nothing" in str(err.value)
+
+
+def test_a_gap_between_stretches_is_allowed_but_pointed_out():
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{"name": "home", "devices": ["light.a"], "cubes": [
+            {"name": "one", "from": "candle_lighting", "to": "havdalah@06:30"},
+            {"name": "two", "from": "havdalah@08:00", "to": "havdalah"},
+        ]}],
+    })
+    plan_to_payload(plan)  # not an error
+
+    notes = warnings_for(plan)
+    assert any("Nothing is set in between" in note for note in notes)
+
+
+def test_several_exceptions_on_one_device_are_ordered_rather_than_left_to_chance():
+    plan = worked_plan()
+    plan.exceptions.append(
+        PlanException(device="switch.plata", start="havdalah@15:00", stop="havdalah@16:00")
+    )
+    detaches = [s for s in plan_to_payload(plan)["timeslots"] if s["track"].startswith("detach:")]
+
+    assert len({s["track"] for s in detaches}) == 2
+    # if two ever did overlap, the later one wins outright
+    assert [s["priority"] for s in detaches] == [1, 2]
+
+
+def test_the_shabbat_only_sensors_are_called_out():
+    """They exist, they look right, and they miss every festival."""
+    plan = worked_plan()
+    plan.anchors = {
+        "candle_lighting": "sensor.jewish_calendar_upcoming_shabbat_candle_lighting",
+        "havdalah": "sensor.jewish_calendar_upcoming_shabbat_havdalah",
+    }
+    notes = warnings_for(plan)
+
+    assert any("also cover Yom Tov" in note for note in notes)
+
+
 # --- reading one back -------------------------------------------------------
 
 

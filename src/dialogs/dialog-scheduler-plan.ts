@@ -9,7 +9,7 @@ import {
 } from "@mdi/js";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators";
-import { CardConfig, Schedule, TConditionLogicType, TRepeatType, TWeekday, Time, TimeMode } from "../types";
+import { Action, CardConfig, Schedule, TConditionLogicType, TRepeatType, TWeekday, Time, TimeMode } from "../types";
 import { HomeAssistant } from "../lib/types";
 import { localize } from "../localize/localize";
 import { hassLocalize } from "../localize/hassLocalize";
@@ -19,7 +19,7 @@ import { deleteSchedule } from "../data/store/delete_schedule";
 import { handleWebsocketError } from "../data/store/handle_websocket_error";
 import { parseTimeString } from "../data/time/parse_time_string";
 import { timeToString } from "../data/time/time_to_string";
-import { isOffAction } from "../data/format/is_off_action";
+import { isOffAction, invertOnOffAction } from "../data/format/is_off_action";
 import { computeActionColor } from "../data/format/compute_action_color";
 import { computeEntity } from "../lib/entity";
 import { resolveBoundary } from "../data/plan/resolve_boundary";
@@ -891,8 +891,16 @@ export class DialogSchedulerPlan extends LitElement {
             },
           })
         )}
+          ${this._renderLightFields(cube.action, action =>
+          this._updateCube(group.track, cube.id, { action })
+        )}
           ${this._renderColorField(cube.color, color => this._updateCube(group.track, cube.id, { color }))}
+          ${this._renderEnforceField(cube.enforce, enforce =>
+          this._updateCube(group.track, cube.id, { enforce })
+        )}
         </div>
+
+        ${this._renderOverrides(group, cube)}
 
         <div class="members">
           <label>${this._t('group.devices')}</label>
@@ -959,6 +967,7 @@ export class DialogSchedulerPlan extends LitElement {
         },
       })
     )}
+          ${this._renderLightFields(detach.action, action => this._updateDetach(detach.track, { action }))}
           <label class="field once">
             <span class="field-label">${this._t('detach.once')}</span>
             <input
@@ -1061,6 +1070,141 @@ export class DialogSchedulerPlan extends LitElement {
           <button class="${off ? '' : 'active'}" @click=${() => onChange(false)}>${this._t('state.on')}</button>
           <button class="${off ? 'active' : ''}" @click=${() => onChange(true)}>${this._t('state.off')}</button>
         </div>
+      </div>
+    `;
+  }
+
+  /**
+   * The devices of the group, each showing what it does in this stretch.
+   *
+   * Clicking one flips it away from the group and back again, so a stretch
+   * where the lights are on but the hotplate is off is two clicks rather than
+   * a second copy of the whole timeline.
+   */
+  private _renderOverrides(group: PlanGroup, cube: PlanCube) {
+    if (group.entities.length < 2) return nothing;
+    const groupIsOff = isOffAction(cube.action);
+
+    return html`
+      <div class="overrides">
+        <label>${this._t('override.label')}</label>
+        <div class="member-chips">
+          ${group.entities.map(entity => {
+      const own = cube.overrides?.[entity];
+      const off = own ? isOffAction(own) : groupIsOff;
+      return html`
+            <button
+              class="chip device ${off ? 'off' : 'on'} ${own ? 'overridden' : ''}"
+              title=${own ? this._t('override.back') : this._t('override.flip')}
+              @click=${() => this._toggleOverride(group, cube, entity)}
+            >
+              <span class="device-dot"></span>
+              ${this.hass.states[entity]?.attributes.friendly_name || entity}
+              <span class="device-state">${this._t(off ? 'state.off' : 'state.on')}</span>
+            </button>`;
+    })}
+        </div>
+        <span class="hint">${this._t('override.hint')}</span>
+      </div>
+    `;
+  }
+
+  private _toggleOverride(group: PlanGroup, cube: PlanCube, entity: string) {
+    const overrides = { ...(cube.overrides || {}) };
+    if (overrides[entity]) {
+      // back with the group
+      delete overrides[entity];
+    } else {
+      const opposite = invertOnOffAction(cube.action);
+      if (!opposite) return;
+      overrides[entity] = opposite;
+    }
+    this._updateCube(group.track, cube.id, {
+      overrides: Object.keys(overrides).length ? overrides : undefined,
+    });
+  }
+
+  /** brightness and warmth, for the devices that have them */
+  private _renderLightFields(action: Action, onChange: (action: Action) => void) {
+    if (isOffAction(action)) return nothing;
+
+    const data = action.service_data || {};
+    const brightness = data.brightness_pct ?? (
+      data.brightness !== undefined ? Math.round((data.brightness / 255) * 100) : undefined
+    );
+    const kelvin = data.color_temp_kelvin;
+
+    const set = (changes: Record<string, any>) => {
+      const service_data = { ...data, ...changes };
+      Object.keys(service_data).forEach(key => {
+        if (service_data[key] === undefined) delete service_data[key];
+      });
+      onChange({ ...action, service_data });
+    };
+
+    return html`
+      <div class="field">
+        <span class="field-label">${this._t('light.brightness')}</span>
+        <div class="field-row">
+          <input
+            type="range" min="1" max="100" step="1"
+            .value=${String(brightness ?? 100)}
+            ?disabled=${brightness === undefined}
+            @input=${(ev: Event) => set({
+      brightness_pct: Number((ev.target as HTMLInputElement).value),
+      brightness: undefined,
+    })}
+          />
+          <span class="field-value">${brightness === undefined ? '—' : `${brightness}%`}</span>
+          <button
+            class="ghost small"
+            @click=${() => set({
+      brightness_pct: brightness === undefined ? 100 : undefined,
+      brightness: undefined,
+    })}
+          >${brightness === undefined ? this._t('light.set') : this._t('light.clear')}</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">${this._t('light.warmth')}</span>
+        <div class="field-row">
+          <input
+            class="kelvin"
+            type="range" min="2000" max="6500" step="100"
+            .value=${String(kelvin ?? 2700)}
+            ?disabled=${kelvin === undefined}
+            @input=${(ev: Event) => set({ color_temp_kelvin: Number((ev.target as HTMLInputElement).value) })}
+          />
+          <span class="field-value">
+            ${kelvin === undefined
+        ? '—'
+        : `${kelvin}K · ${this._t(kelvin <= 3200 ? 'light.warm' : kelvin <= 4800 ? 'light.neutral' : 'light.cool')}`}
+          </span>
+          <button
+            class="ghost small"
+            @click=${() => set({ color_temp_kelvin: kelvin === undefined ? 2700 : undefined })}
+          >${kelvin === undefined ? this._t('light.set') : this._t('light.clear')}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderEnforceField(enforce: boolean | undefined, onChange: (enforce: boolean) => void) {
+    return html`
+      <div class="field">
+        <span class="field-label">
+          ${this._t('enforce.label')} <span class="beta">${this._t('enforce.beta')}</span>
+        </span>
+        <div class="segmented">
+          <button class=${enforce ? '' : 'active'} @click=${() => onChange(false)}>
+            ${this._t('enforce.off')}
+          </button>
+          <button class=${enforce ? 'active' : ''} @click=${() => onChange(true)}>
+            ${this._t('enforce.on')}
+          </button>
+        </div>
+        <span class="field-resolved">${this._t('enforce.hint')}</span>
       </div>
     `;
   }
@@ -1703,6 +1847,51 @@ export class DialogSchedulerPlan extends LitElement {
         color: var(--primary-text-color);
         padding: 7px 10px;
         cursor: pointer;
+      }
+
+      .overrides { display: flex; flex-direction: column; gap: 8px; }
+      .overrides > label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--secondary-text-color);
+      }
+      .chip.device { gap: 8px; }
+      .device-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: rgba(var(--plan-off), 0.5);
+        flex: 0 0 auto;
+      }
+      .chip.device.on .device-dot { background: rgb(var(--plan-on)); }
+      .chip.device.overridden {
+        border-color: rgba(var(--plan-detach), 0.8);
+        box-shadow: inset 0 0 0 1px rgba(var(--plan-detach), 0.35);
+      }
+      .device-state { font-size: 11px; color: var(--secondary-text-color); font-weight: 600; }
+
+      input[type="range"] { width: 150px; accent-color: var(--primary-color); }
+      input[type="range"].kelvin {
+        accent-color: #ffb060;
+        background: linear-gradient(to right, #ffb060, #ffffff);
+        border-radius: 999px;
+      }
+      input[type="range"][disabled] { opacity: 0.35; }
+      .field-value {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums;
+        min-width: 72px;
+      }
+      .ghost.small { font-size: 11px; padding: 4px 8px; }
+      .beta {
+        font-size: 9px;
+        letter-spacing: 0.04em;
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: rgba(var(--plan-detach), 0.2);
+        color: var(--primary-text-color);
       }
 
       .swatches { display: flex; gap: 6px; }

@@ -88,6 +88,9 @@ DEFAULT_PRIORITY = 0
 # How a slot is drawn. The engine never reads it; it is stored here because a
 # slot is the only thing a plan's stretch is saved as.
 ATTR_COLOR = "color"
+# Hold the entities to what this slot asked for: if something else moves one
+# while the slot is running, set it back. Experimental.
+ATTR_ENFORCE = "enforce"
 ATTR_WEEKDAYS = "weekdays"
 ATTR_ENABLED = "enabled"
 ATTR_SCHEDULE_ID = "schedule_id"
@@ -190,6 +193,7 @@ TIMESLOT_SCHEMA = vol.Schema(
         vol.Optional(ATTR_END_DATE, default=None): validate_date,
         vol.Optional(ATTR_NAME): vol.Any(cv.string, None),
         vol.Optional(ATTR_COLOR): vol.Any(cv.string, None),
+        vol.Optional(ATTR_ENFORCE, default=False): cv.boolean,
         vol.Optional(ATTR_TRACK, default=DEFAULT_TRACK): validate_track,
         vol.Optional(ATTR_PRIORITY, default=DEFAULT_PRIORITY): vol.All(
             vol.Coerce(int), vol.Range(min=0)

@@ -30,9 +30,17 @@ export interface PlanCube {
   name: string;
   start: string;
   stop: string;
+  /** what most of the group's devices do in this stretch */
   action: Action;
+  /**
+   * One device doing something else, here, without the timeline being copied
+   * for it: the group's lights on while its hotplate stays off.
+   */
+  overrides?: Record<string, Action>;
   /** an explicit colour; without one the action decides how it is drawn */
   color?: string;
+  /** put the devices back if something else moves them during this stretch */
+  enforce?: boolean;
 }
 
 export interface PlanGroup {
@@ -80,6 +88,50 @@ const withTargets = (action: Action, entities: string[]): Action => ({
   ...action,
   target: { entity_id: entities },
 });
+
+/** what one device is asked to do, so two of them can be compared */
+const actionKey = (action?: Action) =>
+  action ? `${action.service}|${JSON.stringify(action.service_data || {})}` : '';
+
+/** the action a device gets in a stretch: its own if it has one, else the group's */
+export const cubeActionFor = (cube: PlanCube, device: string): Action =>
+  cube.overrides?.[device] || cube.action;
+
+/**
+ * Split a stretch's actions into "what the group does" and "who differs".
+ *
+ * Whatever most devices are doing is the stretch's own state; anything else is
+ * that device's override. This is what lets one device differ inside a stretch
+ * without the whole timeline being duplicated for it.
+ */
+const splitActions = (actions: Action[]) => {
+  const perDevice = new Map<string, Action>();
+  actions.forEach(action => {
+    [action.target?.entity_id || []].flat().forEach(entity => {
+      if (entity) perDevice.set(entity, { ...action, target: { entity_id: entity } });
+    });
+  });
+
+  const tally = new Map<string, number>();
+  perDevice.forEach(action => tally.set(actionKey(action), (tally.get(actionKey(action)) || 0) + 1));
+
+  let winner = '';
+  let best = -1;
+  tally.forEach((count, key) => {
+    if (count > best) {
+      best = count;
+      winner = key;
+    }
+  });
+
+  const common = [...perDevice.values()].find(a => actionKey(a) == winner) || actions[0];
+  const overrides: Record<string, Action> = {};
+  perDevice.forEach((action, device) => {
+    if (actionKey(action) != winner) overrides[device] = { ...action, target: undefined };
+  });
+
+  return { action: { ...common, target: undefined } as Action, overrides };
+};
 
 /** the anchor an anchored time is measured against, if it has one */
 export const anchorEntityOf = (time?: string): string | undefined => {
@@ -130,8 +182,9 @@ export const planFromSchedule = (schedule?: Schedule): Plan => {
         name: slot.name || '',
         start: slot.start,
         stop: slot.stop || slot.start,
-        action: slot.actions[0],
         color: slot.color,
+        enforce: slot.enforce,
+        ...splitActions(slot.actions),
       })),
     });
   });
@@ -158,9 +211,14 @@ export const planToSchedule = (plan: Plan, base: Schedule): Schedule => {
         stop: cube.stop,
         name: cube.name || undefined,
         color: cube.color,
+        enforce: cube.enforce,
         track: group.track,
         priority: 0,
-        actions: [withTargets(cube.action, group.entities)],
+        // one action per device, so a device can differ inside the stretch
+        // without the stretch being copied for it
+        actions: group.entities.map(device =>
+          withTargets(cubeActionFor(cube, device), [device])
+        ),
         conditions: emptyConditions(),
       });
     });

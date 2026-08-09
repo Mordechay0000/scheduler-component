@@ -102,6 +102,28 @@ A WORKED PLAN
 A device named in an exception must also be in a group - an exception is a
 device leaving its group for a while, so there has to be a group to leave. Add
 "only_on": "2026-08-15" to make an exception happen once instead of weekly.
+
+ONE DEVICE DIFFERING INSIDE A STRETCH
+Do not copy the plan for a device that needs a different state in one stretch.
+Put an override on that stretch instead - the device stays in its group and
+follows it everywhere else:
+
+  {"name": "morning", "from": "havdalah@06:30", "to": "havdalah@13:00",
+   "state": "on", "overrides": [{"device": "switch.plata", "state": "off"}]}
+
+Use an exception instead only when the device needs its own *hours* - different
+start and stop times from the group.
+
+LIGHTS
+"brightness" is 1-100 percent and "kelvin" is colour temperature: about 2200 is
+warm, 4000 neutral, 6500 daylight. Both apply to a stretch or to a single
+override, and both are ignored when the state is "off".
+
+HOLDING A STATE (experimental)
+"enforce": true on a stretch puts a device back if a wall switch or another
+integration moves it while that stretch is running - for a switch pressed by
+accident on Shabbat. It waits 30 seconds between attempts so it cannot end up
+trading service calls with whatever moved it.
 """.strip()
 
 
@@ -115,6 +137,24 @@ TIME_DESCRIPTION = (
     "havdalah@06:30 (06:30 on the day it goes out), or HH:MM for every day"
 )
 
+BRIGHTNESS = vol.All(vol.Coerce(int), vol.Range(min=1, max=100))
+KELVIN = vol.All(vol.Coerce(int), vol.Range(min=1500, max=8000))
+
+OVERRIDE_SCHEMA = vol.Schema(
+    {
+        vol.Required(
+            "device",
+            description="entity id of a device in this group that does something "
+            "different in this stretch",
+        ): cv.string,
+        vol.Optional("state", description="'on' or 'off'", default="on"): vol.In(["on", "off"]),
+        vol.Optional("brightness", description="1-100 percent, lights only"): BRIGHTNESS,
+        vol.Optional(
+            "kelvin", description="colour temperature: 2200 warm, 4000 neutral, 6500 daylight"
+        ): KELVIN,
+    }
+)
+
 CUBE_SCHEMA = vol.Schema(
     {
         vol.Optional("name", description="what this stretch is called"): cv.string,
@@ -123,6 +163,20 @@ CUBE_SCHEMA = vol.Schema(
         vol.Optional(
             "state", description="'on' or 'off' for the whole stretch", default="on"
         ): vol.In(["on", "off"]),
+        vol.Optional("brightness", description="1-100 percent, lights only"): BRIGHTNESS,
+        vol.Optional(
+            "kelvin", description="colour temperature: 2200 warm, 4000 neutral, 6500 daylight"
+        ): KELVIN,
+        vol.Optional(
+            "overrides",
+            description="devices of this group that do something different in this "
+            "stretch, instead of copying the whole plan for them",
+        ): [OVERRIDE_SCHEMA],
+        vol.Optional(
+            "enforce",
+            description="put the devices back if a wall switch or another integration "
+            "moves them while this stretch is running (experimental)",
+        ): cv.boolean,
         vol.Optional("color", description="hex colour for the editor, e.g. #43a047"): cv.string,
     }
 )
@@ -150,6 +204,13 @@ EXCEPTION_SCHEMA = vol.Schema(
         vol.Optional("state", description="'on' or 'off' while it runs", default="on"): vol.In(
             ["on", "off"]
         ),
+        vol.Optional("brightness", description="1-100 percent, lights only"): BRIGHTNESS,
+        vol.Optional(
+            "kelvin", description="colour temperature: 2200 warm, 4000 neutral, 6500 daylight"
+        ): KELVIN,
+        vol.Optional(
+            "enforce", description="put the device back if something else moves it (experimental)"
+        ): cv.boolean,
         vol.Optional(
             "only_on", description="YYYY-MM-DD to make it happen once instead of weekly"
         ): cv.string,

@@ -56,6 +56,8 @@ export interface Timeslot {
   name?: string;
   /** how it is drawn; nothing acts on it */
   color?: string;
+  /** put the entities back if something else moves them while this slot runs */
+  enforce?: boolean;
   /** the timeline this slot belongs to; slots on different tracks overlap */
   track?: string;
   /** which track wins when two of them target the same entity at once */
