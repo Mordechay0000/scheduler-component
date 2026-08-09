@@ -87,6 +87,36 @@ If you create a snapshot through HA supervisor, this file should automatically b
 
 The entities in HA are created from the `scheduler.storage` file upon (re)starting HA.
 
+## Shabbat plans
+
+A plan is one schedule that covers a whole Shabbat or Yom Tov: a band from
+candle lighting to havdalah, cut into named stretches, with a row per group of
+devices. Open it from the candle icon in the card header.
+
+It rests on three things the engine can do that a plain schedule does not need:
+
+* **Times anchored to an entity.** A halachic time is not a fixed offset from
+  astronomical sunset, so it has to be read from an entity every time rather
+  than baked into the schedule. `sensor.jewish_calendar_upcoming_candle_lighting-00:18:00`
+  means "eighteen minutes before whatever that sensor says", re-read at trigger
+  time. Enable the [Jewish Calendar](https://www.home-assistant.io/integrations/jewish_calendar/)
+  integration to get those sensors.
+* **A clock time on the day an anchor names.** `…upcoming_havdalah@06:30:00` is
+  half past six on the morning the band ends, whichever day that is. This is
+  what keeps the stretches inside the band on a festival, where no weekday rule
+  can describe the days at all.
+* **Independent tracks.** Timeslots carry a `track`; slots on different tracks
+  keep their own partition of the day and may overlap. So a group of devices
+  keeps its stretches while one device runs its own hours, and moving a boundary
+  drawn for that device leaves everybody else alone. When two tracks act on the
+  same entity at once the one with the higher `priority` owns it — which is what
+  "detach from the group, then rejoin it" is: while the detach runs, the group
+  leaves that device alone, including across a restart; when it ends, the group
+  takes the device back.
+
+All three are ordinary schedule features, usable from `scheduler.add` and
+`scheduler.edit` without the plan editor.
+
 ## Documentation
 
 * [Card usage & configuration](docs/card.md) — creating schedules and time schemes, card options, `customize`, display options, tags, translations, tips & tricks, troubleshooting.
@@ -116,6 +146,14 @@ If you want to make a donation as appreciation of the work on this project, you 
 תזמון מבוסס-זמן ל-Home Assistant. הריפו הזה מכיל גם את הרכיב (האינטגרציה שמנהלת ומריצה את התזמונים) וגם את כרטיס ה-Lovelace — בהתקנה אחת. הכרטיס מוגש על ידי האינטגרציה ונרשם אוטומטית, כך שאין צורך להתקין אותו בנפרד ואין צורך להוסיף Lovelace resource.
 
 אם הכרטיס כבר מותקן אצלכם בנפרד (דרך HACS Frontend או ידנית ב-`www/`), יש להסיר אותו ואת ה-resource — אחרת הדפדפן טוען את הכרטיס פעמיים. ראו את הסעיף "Migrating from a separate scheduler-card installation" למעלה. התזמונים עצמם לא מושפעים.
+
+**תוכנית שבת:**
+
+תוכנית אחת מכסה שבת או יום טוב שלם: פס אחד מהדלקת נרות ועד צאת שבת, מחולק לקוביות עם שמות, ומסלול לכל קבוצת מכשירים. נפתחת מסמל הנר בכותרת הכרטיס.
+
+* **עוגן מבוסס-ישות** – זמן הלכתי אינו היסט קבוע מהשקיעה האסטרונומית, ולכן הוא נקרא מהישות מחדש בכל הפעלה. למשל `sensor.jewish_calendar_upcoming_candle_lighting-00:18:00`. נדרשת אינטגרציית [Jewish Calendar](https://www.home-assistant.io/integrations/jewish_calendar/).
+* **שעה קבועה ביום של עוגן** – `‎…upcoming_havdalah@06:30:00` היא 06:30 בבוקר שבו הפס נגמר, יהיה זה איזה יום שיהיה. כך הגבולות הפנימיים נשארים בתוך הפס גם ביום טוב, שאף כלל ימים בשבוע לא יכול לתאר.
+* **מסלולים עצמאיים** – לכל קבוצה מחיצת זמנים משלה, ולכן גבול שנועד למכשיר אחד אינו מפצל את השאר. מכשיר שמתנתק מקבל מסלול בעדיפות גבוהה יותר: כל עוד הניתוק פועל הקבוצה לא נוגעת בו (גם אחרי הפעלה מחדש), וכשהוא נגמר הקבוצה מחזירה אותו אליה.
 
 **עורך התזמון (Time scheme) המשופר:**
 
