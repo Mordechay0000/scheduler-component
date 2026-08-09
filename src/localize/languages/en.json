@@ -290,15 +290,16 @@
         "anchor": {
           "opens": "Candle lighting",
           "closes": "Havdalah",
-          "fixed": "Fixed time"
+          "fixed": "the same hour every day (not tied to Shabbat)"
         },
         "boundary": {
-          "from": "From",
-          "to": "Until",
-          "at_clock": "at",
-          "offset": "offset by",
+          "exact": "at the anchor",
+          "offset": "before / after",
+          "clock": "at a clock time that day",
           "before": "before",
-          "after": "after"
+          "after": "after",
+          "from": "From",
+          "to": "Until"
         },
         "cube": {
           "welcome": "Kabbalat Shabbat",
@@ -323,7 +324,9 @@
           "row": "detached from its group",
           "rejoin": "Back to the group",
           "note": "{device} keeps its own hours here. The group leaves it alone until this ends, then takes it back.",
-          "once": "One-off, on"
+          "once": "One-off, on",
+          "hint": "Click a device to give it its own hours here.",
+          "once_hint": "Leave empty to repeat every week."
         },
         "state": {
           "label": "State",
@@ -334,6 +337,48 @@
           "no_entities": "\"{group}\" has no devices yet.",
           "no_anchor": "The plan needs its times from an entity.",
           "no_anchor_hint": "Enable the Jewish Calendar integration so that {start} and {end} publish a time. Halachic times are not a fixed offset from sunset, so they have to be read at trigger time rather than guessed."
+        },
+        "color": {
+          "label": "Colour",
+          "auto": "Automatic — follows the action"
+        },
+        "help": {
+          "open": "What is this?",
+          "band": "The bar is one Shabbat, from candle lighting to havdalah. It is not a clock: it starts on Friday evening and ends the next night, so the same bar covers a festival that runs for two or three days.",
+          "rows": "Each row is a group of devices that move together. Cutting a stretch in one row changes only that row — nobody else's times move.",
+          "detach": "A device that needs different hours for a while is detached: it gets a row of its own, and while that row is running the group leaves it alone. When it ends the group takes it back, with no further action from you.",
+          "keys": "Click a stretch to edit it. Drag the line between two stretches to move the boundary. + splits a stretch in two; Delete removes the selected one."
+        },
+        "wizard": {
+          "open": "Guided setup",
+          "offer": "New here? A few questions will build a working plan, and you can keep editing it afterwards.",
+          "offer_yes": "Take me through it",
+          "offer_no": "I'll do it myself",
+          "back": "Back",
+          "next": "Next",
+          "finish": "Build the plan",
+          "yes": "Yes",
+          "no": "No",
+          "intro": {
+            "title": "Let's set up your Shabbat",
+            "body": "You'll answer a few questions and get a working plan. Nothing is saved until you press Save at the end, and everything can be changed afterwards in the editor."
+          },
+          "devices": {
+            "title": "Which devices?",
+            "body": "Pick the lights and switches that should follow this plan. You can add more later, and any one of them can be given its own hours afterwards."
+          },
+          "candle": {
+            "title": "At candle lighting",
+            "body": "When Shabbat comes in, should these devices be on or off? The exact time is read from the Jewish Calendar every week, so it follows the season on its own."
+          },
+          "night": {
+            "title": "Turning off for the night",
+            "body": "Many people turn everything off late on Friday night. Choose a time, or skip this."
+          },
+          "morning": {
+            "title": "Back on in the morning",
+            "body": "And back on on Shabbat morning. This is a clock time on the day Shabbat ends, so it lands correctly on a festival too."
+          }
         }
       }
     }

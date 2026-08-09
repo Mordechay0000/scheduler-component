@@ -31,6 +31,8 @@ export interface PlanCube {
   start: string;
   stop: string;
   action: Action;
+  /** an explicit colour; without one the action decides how it is drawn */
+  color?: string;
 }
 
 export interface PlanGroup {
@@ -129,6 +131,7 @@ export const planFromSchedule = (schedule?: Schedule): Plan => {
         start: slot.start,
         stop: slot.stop || slot.start,
         action: slot.actions[0],
+        color: slot.color,
       })),
     });
   });
@@ -154,6 +157,7 @@ export const planToSchedule = (plan: Plan, base: Schedule): Schedule => {
         start: cube.start,
         stop: cube.stop,
         name: cube.name || undefined,
+        color: cube.color,
         track: group.track,
         priority: 0,
         actions: [withTargets(cube.action, group.entities)],

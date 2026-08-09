@@ -139,6 +139,138 @@ export default async function run() {
       'the row is labelled with the device, not with an entity id');
   }, JERUSALEM);
 
+  // --- saying what a boundary means ---------------------------------------
+  //
+  // The three ways of writing a boundary look alike in a dropdown and are not
+  // alike at all, so each one is pinned to the string it produces.
+
+  await withPage(page(), async p => {
+    const written = await p.evaluate(([candle, havdalah]) => {
+      const dialog = window.__dialog;
+      const parts = dialog._boundaryParts(candle + '@22:30:00');
+      return {
+        readBack: parts,
+        exact: dialog._boundaryString({ ...parts, anchor: candle, mode: 'exact' }),
+        offset: dialog._boundaryString({ anchor: havdalah, mode: 'offset', hours: 0, minutes: 30, before: true }),
+        clock: dialog._boundaryString({ anchor: havdalah, mode: 'clock', hours: 6, minutes: 30, before: false }),
+        daily: dialog._boundaryString({ anchor: '', mode: 'clock', hours: 13, minutes: 0, before: false }),
+      };
+    }, [CANDLE, HAVDALAH]);
+
+    s.ok(written.readBack.mode === 'clock' && written.readBack.hours === 22,
+      'a clock-on-that-day boundary reads back as one');
+    s.ok(written.exact === CANDLE + '+00:00:00', '"at the anchor" is the anchor itself');
+    s.ok(written.offset === HAVDALAH + '-00:30:00', '"before / after" is an offset');
+    s.ok(written.clock === HAVDALAH + '@06:30:00', '"at a clock time that day" borrows only the date');
+    s.ok(written.daily === '13:00:00', 'and with no anchor at all it is the same hour every day');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    // a boundary hanging off some other entity must not be quietly rewritten
+    const labels = await p.evaluate(() => {
+      const dialog = window.__dialog;
+      return dialog._anchorOptions('sensor.my_own_zman').map(o => o.value);
+    });
+    s.ok(labels.includes('sensor.my_own_zman'),
+      'an anchor the plan does not own is still offered, so editing cannot drop it');
+    s.ok(labels[labels.length - 1] === '', 'the every-day option comes last, where it belongs');
+  }, JERUSALEM);
+
+  // --- adding, deleting and colouring a stretch ----------------------------
+
+  await withPage(page(), async p => {
+    const before = await count(p, '.cube');
+    await p.evaluate(() => {
+      const dialog = window.__dialog;
+      dialog._selected = dialog._plan.groups[0].cubes[1].id;
+      dialog._splitCube(dialog._plan.groups[0], dialog._plan.groups[0].cubes[1]);
+    });
+    await p.evaluate(() => window.__dialog.updateComplete);
+    s.ok(await count(p, '.cube') === before + 1, 'splitting a stretch gives two');
+
+    const opposite = await p.evaluate(() => {
+      const cubes = window.__dialog._plan.groups[0].cubes;
+      return [cubes[1].action.service, cubes[2].action.service];
+    });
+    s.ok(opposite[0] !== opposite[1],
+      'the new stretch defaults to the opposite state, as a carved slot does on the ordinary bar');
+
+    // Delete removes the selected stretch and the neighbour absorbs its time
+    const span = await p.evaluate(() => {
+      const dialog = window.__dialog;
+      const cubes = dialog._plan.groups[0].cubes;
+      const doomed = cubes[2];
+      dialog._selected = doomed.id;
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
+      return { stop: doomed.stop, after: window.__dialog._plan.groups[0].cubes[1].stop };
+    });
+    await p.evaluate(() => window.__dialog.updateComplete);
+    s.ok(await count(p, '.cube') === before, 'the Delete key removes the selected stretch');
+    s.ok(span.stop === span.after, 'and its neighbour takes over the time, so the band stays whole');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const call = await saveWith(p, `
+      dialog._updateCube(dialog._plan.groups[0].track, dialog._plan.groups[0].cubes[0].id, { color: '#8e24aa' });
+    `);
+    s.ok(call.data.timeslots[0].color === '#8e24aa', 'a colour chosen for a stretch is saved with it');
+  }, JERUSALEM);
+
+  // --- the wizard is a way in, not the only way ---------------------------
+
+  await withPage(page(), async p => {
+    s.ok(await count(p, '.offer') === 1, 'a new plan offers the guided path');
+    s.ok(await count(p, '.band') === 1, 'and the editor is right there too, not replaced by it');
+
+    await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizardStep = 0;
+      await dialog.updateComplete;
+    });
+    s.ok(await count(p, '.wizard') === 1, 'the guided path opens');
+
+    const call = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizard = {
+        ...dialog._wizard,
+        entities: ['light.salon', 'switch.boiler'],
+        onAtCandleLighting: true,
+        hasNightOff: true, nightOff: '22:30',
+        hasMorningOn: true, morningOn: '06:30',
+      };
+      dialog._finishWizard();
+      await dialog.updateComplete;
+      await dialog._save();
+      return (window.__apiCalls || []).slice(-1)[0];
+    });
+
+    const slots = call.data.timeslots;
+    s.ok(slots.length === 3, 'the answers become three stretches');
+    s.ok(slots[0].start === CANDLE + '+00:00:00', 'the first opens at candle lighting');
+    s.ok(slots[1].start === CANDLE + '@22:30:00', 'the night-off is on the evening the band opened');
+    s.ok(slots[2].start === HAVDALAH + '@06:30:00', 'and the morning is on the day it closes');
+    s.ok(slots.every(e => [e.actions].flat().some(a => a.entity_id === 'light.salon')),
+      'the devices picked in the wizard are the ones acted on');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    await p.evaluate(async () => {
+      window.__dialog._wizardStep = 0;
+      await window.__dialog.updateComplete;
+      window.__dialog._wizardStep = null;
+      await window.__dialog.updateComplete;
+    });
+    s.ok(await count(p, '.band') === 1, 'leaving the guided path lands back in the editor');
+  }, JERUSALEM);
+
+  await withPage(page({ schedule: null }), async p => {
+    await p.evaluate(async () => {
+      window.__dialog._help = true;
+      await window.__dialog.updateComplete;
+    });
+    s.ok(await count(p, '.help p') === 4, 'the editor can explain itself in place');
+  }, JERUSALEM);
+
   // --- reopening a saved plan ---------------------------------------------
 
   const savedPlan = {

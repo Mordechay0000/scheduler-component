@@ -54,6 +54,8 @@ export interface Timeslot {
   conditions: ConditionConfig
   /** what this stretch is called, shown on the slot itself */
   name?: string;
+  /** how it is drawn; nothing acts on it */
+  color?: string;
   /** the timeline this slot belongs to; slots on different tracks overlap */
   track?: string;
   /** which track wins when two of them target the same entity at once */

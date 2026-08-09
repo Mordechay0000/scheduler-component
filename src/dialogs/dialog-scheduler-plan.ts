@@ -1,11 +1,18 @@
-import { mdiClose, mdiPlus, mdiTrashCanOutline, mdiCallSplit, mdiUndoVariant } from "@mdi/js";
+import {
+  mdiCallSplit,
+  mdiClose,
+  mdiHelpCircleOutline,
+  mdiPlus,
+  mdiTrashCanOutline,
+  mdiUndoVariant,
+  mdiWizardHat,
+} from "@mdi/js";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators";
 import { CardConfig, Schedule, TConditionLogicType, TRepeatType, TWeekday, Time, TimeMode } from "../types";
 import { HomeAssistant } from "../lib/types";
 import { localize } from "../localize/localize";
 import { hassLocalize } from "../localize/hassLocalize";
-import { fireEvent } from "../lib/fire_event";
 import { saveSchedule } from "../data/store/save_schedule";
 import { updateSchedule } from "../data/store/update_schedule";
 import { deleteSchedule } from "../data/store/delete_schedule";
@@ -13,12 +20,12 @@ import { handleWebsocketError } from "../data/store/handle_websocket_error";
 import { parseTimeString } from "../data/time/parse_time_string";
 import { timeToString } from "../data/time/time_to_string";
 import { isOffAction } from "../data/format/is_off_action";
+import { computeActionColor } from "../data/format/compute_action_color";
 import { computeEntity } from "../lib/entity";
 import { resolveBoundary } from "../data/plan/resolve_boundary";
 import {
   DEFAULT_END_ANCHOR,
   DEFAULT_START_ANCHOR,
-  DETACH_PRIORITY,
   Plan,
   PlanCube,
   PlanDetach,
@@ -37,18 +44,39 @@ export type PlanDialogParams = {
   cardConfig: CardConfig;
 };
 
-/** which anchor a boundary hangs off, and how */
-type BoundaryAnchor = 'start' | 'end' | 'fixed';
-type BoundaryMode = 'offset' | 'clock';
+/**
+ * How a boundary is written down.
+ *
+ * These three are genuinely different things, and the editor used to blur two
+ * of them together by offering "at a time" in two different lists:
+ *
+ *   exact  - the anchor itself. Candle lighting, whenever that is.
+ *   offset - so long before or after the anchor. Half an hour before havdalah.
+ *   clock  - a reading on the clock, on the day the anchor falls. 06:30 on the
+ *            morning Shabbat ends - which is a different date every week, and
+ *            not a Saturday at all when the festival runs into one.
+ *
+ * Only the third one is a clock time, and it still needs an anchor to know
+ * which day it belongs to. A boundary with no anchor at all is a fourth thing:
+ * the same clock time every single day, which inside a plan is almost always a
+ * mistake, so it is offered last and labelled as such.
+ */
+type BoundaryMode = 'exact' | 'offset' | 'clock';
 
 type BoundaryParts = {
-  anchor: BoundaryAnchor;
+  /** the entity the boundary hangs off, or '' for a plain daily clock time */
+  anchor: string;
   mode: BoundaryMode;
   /** always positive; `before` carries the direction */
   hours: number;
   minutes: number;
   before: boolean;
 };
+
+const SNAP_MINUTES = 5;
+
+/** the swatches offered for a stretch, on top of "let the action decide" */
+const PALETTE = ['#43a047', '#1e88e5', '#8e24aa', '#f4511e', '#00897b', '#6d4c41'];
 
 const emptySchedule = (): Schedule => ({
   entries: [{ weekdays: [TWeekday.Daily], slots: [] }],
@@ -65,6 +93,8 @@ const emptyConditions = () => ({
   track_changes: false,
 });
 
+const sameDay = (a: Date, b: Date) => a.toDateString() == b.toDateString();
+
 @customElement('dialog-scheduler-plan')
 export class DialogSchedulerPlan extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
@@ -73,24 +103,33 @@ export class DialogSchedulerPlan extends LitElement {
   @state() private _plan!: Plan;
   @state() private _selected: string | null = null;
   @state() private _error: string | null = null;
+  @state() private _help = false;
+
+  /** the wizard is a way in, never the only way: the editor is always there */
+  @state() private _wizardStep: number | null = null;
+  @state() private _offerWizard = false;
+  @state() private _wizard = {
+    entities: [] as string[],
+    onAtCandleLighting: true,
+    nightOff: '22:30',
+    hasNightOff: true,
+    morningOn: '06:30',
+    hasMorningOn: true,
+  };
 
   private _base: Schedule = emptySchedule();
+  private _drag: { row: string; index: number; track: HTMLElement } | null = null;
 
   public async showDialog(params: PlanDialogParams): Promise<void> {
     this._params = params;
     this._base = params.schedule ? { ...params.schedule } : emptySchedule();
-    this._plan = params.schedule
-      ? planFromSchedule(params.schedule)
-      : defaultPlan(this._t('title'), [
-        this._t('cube.welcome'),
-        this._t('cube.night'),
-        this._t('cube.morning'),
-        this._t('cube.afternoon'),
-        this._t('cube.close'),
-        this._t('group.default'),
-      ]);
+    this._plan = params.schedule ? planFromSchedule(params.schedule) : this._blankPlan();
     this._selected = this._plan.groups[0]?.cubes[0]?.id ?? null;
     this._error = null;
+    this._help = false;
+    this._wizardStep = null;
+    // a brand new plan is where the step-by-step path is worth offering
+    this._offerWizard = !params.schedule;
     await this.updateComplete;
   }
 
@@ -98,15 +137,57 @@ export class DialogSchedulerPlan extends LitElement {
     this._params = undefined;
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    window.addEventListener('keydown', this._handleKeyDown);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('keydown', this._handleKeyDown);
+    super.disconnectedCallback();
+  }
+
   private _t(key: string, search?: string | string[], replace?: string | string[]) {
     return localize(`ui.panel.plan.${key}`, this.hass, search || [], replace || []);
   }
 
+  private _blankPlan() {
+    return defaultPlan(this._t('title'), [
+      this._t('cube.welcome'),
+      this._t('cube.night'),
+      this._t('cube.morning'),
+      this._t('cube.afternoon'),
+      this._t('cube.close'),
+      this._t('group.default'),
+    ]);
+  }
+
+  // --- keyboard, the same shortcuts the ordinary editor uses ---------------
+
+  private _handleKeyDown = (ev: KeyboardEvent) => {
+    if (!this._params || this._wizardStep !== null) return;
+    const origin = ev.composedPath()[0];
+    // never take Delete away from a field somebody is typing in
+    if (origin instanceof HTMLElement
+      && (['input', 'textarea', 'select'].includes(origin.tagName.toLowerCase()) || origin.isContentEditable)) {
+      return;
+    }
+    if (ev.key != 'Delete' && ev.key != 'Backspace') return;
+
+    const selected = this._selectedCube();
+    if (selected) {
+      ev.preventDefault();
+      this._removeCube(selected.group, selected.cube);
+      return;
+    }
+    const detach = this._selectedDetach();
+    if (detach) {
+      ev.preventDefault();
+      this._rejoinGroup(detach.track);
+    }
+  };
+
   // --- the band -----------------------------------------------------------
-  //
-  // A plan is drawn against real dates: the band opens on one evening and
-  // closes on another, so every stretch is placed by where it actually falls
-  // rather than by a reading on a 24-hour clock.
 
   private get _bandStart() {
     return resolveBoundary(`${this._plan.startAnchor}+00:00:00`, this.hass);
@@ -116,19 +197,23 @@ export class DialogSchedulerPlan extends LitElement {
     return resolveBoundary(`${this._plan.endAnchor}+01:30:00`, this.hass);
   }
 
+  private _moment(value: string) {
+    return resolveBoundary(value, this.hass, this._bandStart || undefined);
+  }
+
   private _position(value: string) {
     const start = this._bandStart;
     const end = this._bandEnd;
     if (!start || !end) return null;
     const span = end.getTime() - start.getTime();
     if (span <= 0) return null;
-    const moment = resolveBoundary(value, this.hass, start);
+    const moment = this._moment(value);
     if (!moment) return null;
     return Math.min(1, Math.max(0, (moment.getTime() - start.getTime()) / span));
   }
 
   private _formatMoment(value: string) {
-    const moment = resolveBoundary(value, this.hass, this._bandStart || undefined);
+    const moment = this._moment(value);
     if (!moment) return '—';
     return new Intl.DateTimeFormat(this.hass.locale?.language || 'en', {
       weekday: 'short',
@@ -163,15 +248,15 @@ export class DialogSchedulerPlan extends LitElement {
 
   private _boundaryParts(value: string): BoundaryParts {
     const parsed = parseTimeString(value);
-    const anchor: BoundaryAnchor =
-      parsed.entity_id == this._plan.startAnchor
-        ? 'start'
-        : parsed.entity_id == this._plan.endAnchor
-          ? 'end'
-          : 'fixed';
+    const anchor = parsed.entity_id || '';
+    const offsetIsZero = parsed.hours == 0 && parsed.minutes == 0;
     return {
       anchor,
-      mode: parsed.mode == TimeMode.EntityDay || anchor == 'fixed' ? 'clock' : 'offset',
+      mode: !anchor
+        ? 'clock'
+        : parsed.mode == TimeMode.EntityDay
+          ? 'clock'
+          : offsetIsZero ? 'exact' : 'offset',
       hours: Math.abs(parsed.hours),
       minutes: Math.abs(parsed.minutes),
       before: parsed.hours < 0 || parsed.minutes < 0,
@@ -179,19 +264,126 @@ export class DialogSchedulerPlan extends LitElement {
   }
 
   private _boundaryString(parts: BoundaryParts): string {
-    if (parts.anchor == 'fixed') {
+    if (!parts.anchor) {
       return timeToString(<Time>{ mode: TimeMode.Fixed, hours: parts.hours, minutes: parts.minutes });
     }
-    const entity_id = parts.anchor == 'start' ? this._plan.startAnchor : this._plan.endAnchor;
+    if (parts.mode == 'exact') {
+      return timeToString(<Time>{ mode: TimeMode.Entity, hours: 0, minutes: 0, entity_id: parts.anchor });
+    }
     if (parts.mode == 'clock') {
-      return timeToString(<Time>{ mode: TimeMode.EntityDay, hours: parts.hours, minutes: parts.minutes, entity_id });
+      return timeToString(<Time>{
+        mode: TimeMode.EntityDay,
+        hours: parts.hours,
+        minutes: parts.minutes,
+        entity_id: parts.anchor,
+      });
     }
     const sign = parts.before ? -1 : 1;
     return timeToString(<Time>{
       mode: TimeMode.Entity,
       hours: sign * parts.hours,
       minutes: sign * parts.minutes,
-      entity_id,
+      entity_id: parts.anchor,
+    });
+  }
+
+  /**
+   * Write a dragged moment down as a boundary.
+   *
+   * A clock time on the anchor's own day says it most plainly, so that is the
+   * first choice. A band that runs over a long festival has days neither anchor
+   * names, and those are measured from whichever anchor is within a day.
+   */
+  private _boundaryFromDate(when: Date): string {
+    const candle = this._moment(`${this._plan.startAnchor}+00:00:00`);
+    const havdalah = this._moment(`${this._plan.endAnchor}+00:00:00`);
+
+    const clockOn = (anchor: string) => timeToString(<Time>{
+      mode: TimeMode.EntityDay,
+      hours: when.getHours(),
+      minutes: when.getMinutes(),
+      entity_id: anchor,
+    });
+
+    if (candle && sameDay(when, candle)) return clockOn(this._plan.startAnchor);
+    if (havdalah && sameDay(when, havdalah)) return clockOn(this._plan.endAnchor);
+
+    const options = [
+      { anchor: this._plan.startAnchor, base: candle },
+      { anchor: this._plan.endAnchor, base: havdalah },
+    ].filter(o => o.base) as { anchor: string; base: Date }[];
+
+    for (const option of options.sort(
+      (a, b) => Math.abs(when.getTime() - a.base.getTime()) - Math.abs(when.getTime() - b.base.getTime())
+    )) {
+      const minutes = Math.round((when.getTime() - option.base.getTime()) / 60000);
+      if (Math.abs(minutes) < 24 * 60) {
+        return this._boundaryString({
+          anchor: option.anchor,
+          mode: 'offset',
+          hours: Math.floor(Math.abs(minutes) / 60),
+          minutes: Math.abs(minutes) % 60,
+          before: minutes < 0,
+        });
+      }
+    }
+    return clockOn(this._plan.endAnchor);
+  }
+
+  // --- dragging a boundary, as on the ordinary time bar --------------------
+
+  private _dateFromPointer(track: HTMLElement, clientX: number) {
+    const start = this._bandStart;
+    const end = this._bandEnd;
+    if (!start || !end) return null;
+    const rect = track.getBoundingClientRect();
+    const rtl = getComputedStyle(this).direction == 'rtl';
+    const fraction = Math.min(1, Math.max(0,
+      (rtl ? rect.right - clientX : clientX - rect.left) / rect.width));
+    const when = new Date(start.getTime() + fraction * (end.getTime() - start.getTime()));
+    when.setMinutes(Math.round(when.getMinutes() / SNAP_MINUTES) * SNAP_MINUTES, 0, 0);
+    return when;
+  }
+
+  private _handleDragStart(ev: PointerEvent, row: string, index: number) {
+    const track = (ev.currentTarget as HTMLElement).parentElement;
+    if (!track) return;
+    ev.preventDefault();
+    (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
+    this._drag = { row, index, track };
+  }
+
+  private _handleDragMove(ev: PointerEvent) {
+    if (!this._drag) return;
+    const when = this._dateFromPointer(this._drag.track, ev.clientX);
+    if (!when) return;
+    this._moveBoundary(this._drag.row, this._drag.index, this._boundaryFromDate(when));
+  }
+
+  private _handleDragEnd() {
+    this._drag = null;
+  }
+
+  /** boundary `index` is the start of cube `index` and the stop of the one before */
+  private _moveBoundary(track: string, index: number, value: string) {
+    const group = this._plan.groups.find(g => g.track == track);
+    if (!group) return;
+
+    const when = this._moment(value);
+    const before = index > 0 ? this._moment(group.cubes[index - 1].start) : null;
+    const after = index < group.cubes.length ? this._moment(group.cubes[index].stop) : null;
+    const gap = SNAP_MINUTES * 60000;
+    if (!when) return;
+    if (before && when.getTime() <= before.getTime() + gap) return;
+    if (after && when.getTime() >= after.getTime() - gap) return;
+
+    const cubes = group.cubes.map((cube, i) => {
+      if (i == index) return { ...cube, start: value };
+      if (i == index - 1) return { ...cube, stop: value };
+      return cube;
+    });
+    this._updatePlan({
+      groups: this._plan.groups.map(g => (g.track == track ? { ...g, cubes } : g)),
     });
   }
 
@@ -234,14 +426,7 @@ export class DialogSchedulerPlan extends LitElement {
 
   private _addGroup() {
     const name = this._t('group.new', '{n}', String(this._plan.groups.length + 1));
-    const template = defaultPlan(this._plan.name, [
-      this._t('cube.welcome'),
-      this._t('cube.night'),
-      this._t('cube.morning'),
-      this._t('cube.afternoon'),
-      this._t('cube.close'),
-      name,
-    ]).groups[0];
+    const template = this._blankPlan().groups[0];
     const group: PlanGroup = {
       ...template,
       track: groupTrack(name),
@@ -259,45 +444,30 @@ export class DialogSchedulerPlan extends LitElement {
 
   private _splitCube(group: PlanGroup, cube: PlanCube) {
     const index = group.cubes.findIndex(c => c.id == cube.id);
-    const middle = this._midpoint(cube.start, cube.stop);
-    if (!middle) return;
-    const first = { ...cube, stop: middle };
+    const a = this._moment(cube.start);
+    const b = this._moment(cube.stop);
+    if (!a || !b || b.getTime() - a.getTime() < 2 * SNAP_MINUTES * 60000) return;
+
+    const middle = new Date((a.getTime() + b.getTime()) / 2);
+    middle.setMinutes(Math.round(middle.getMinutes() / SNAP_MINUTES) * SNAP_MINUTES, 0, 0);
+    const boundary = this._boundaryFromDate(middle);
+
     const second: PlanCube = {
       ...cube,
-      id: `${group.track}#new${Date.now()}`,
+      id: `${group.track}#new${index}${group.cubes.length}`,
       name: '',
-      start: middle,
+      color: undefined,
+      start: boundary,
+      // a new stretch defaults to the opposite of the one it came out of,
+      // which is what the ordinary editor does when a slot is carved
       action: this._invert(cube),
     };
     const cubes = [...group.cubes];
-    cubes.splice(index, 1, first, second);
+    cubes.splice(index, 1, { ...cube, stop: boundary }, second);
     this._updatePlan({
       groups: this._plan.groups.map(g => (g.track == group.track ? { ...g, cubes } : g)),
     });
     this._selected = second.id;
-  }
-
-  private _midpoint(start: string, stop: string) {
-    const a = resolveBoundary(start, this.hass, this._bandStart || undefined);
-    const b = resolveBoundary(stop, this.hass, this._bandStart || undefined);
-    if (!a || !b || b.getTime() <= a.getTime()) return null;
-    const middle = new Date((a.getTime() + b.getTime()) / 2);
-    middle.setMinutes(Math.round(middle.getMinutes() / 15) * 15, 0, 0);
-    // the split lands on the day the stretch runs through, which is what "@"
-    // is for - a plain clock time would leak out of the band
-    const anchor = middle.getTime() - a.getTime() < b.getTime() - middle.getTime()
-      ? start
-      : stop;
-    const anchorEntity = parseTimeString(anchor).entity_id;
-    if (!anchorEntity) {
-      return timeToString(<Time>{ mode: TimeMode.Fixed, hours: middle.getHours(), minutes: middle.getMinutes() });
-    }
-    return timeToString(<Time>{
-      mode: TimeMode.EntityDay,
-      hours: middle.getHours(),
-      minutes: middle.getMinutes(),
-      entity_id: anchorEntity,
-    });
   }
 
   private _invert(cube: PlanCube) {
@@ -308,9 +478,10 @@ export class DialogSchedulerPlan extends LitElement {
 
   private _removeCube(group: PlanGroup, cube: PlanCube) {
     if (group.cubes.length < 2) return;
-    const cubes = group.cubes.filter(c => c.id != cube.id);
     const index = group.cubes.findIndex(c => c.id == cube.id);
-    // the neighbour takes over the stretch that was given up
+    const cubes = group.cubes.filter(c => c.id != cube.id);
+    // the neighbour takes over the stretch that was given up, so the band
+    // stays continuous
     if (index > 0) cubes[index - 1] = { ...cubes[index - 1], stop: cube.stop };
     else cubes[0] = { ...cubes[0], start: cube.start };
     this._updatePlan({
@@ -340,6 +511,17 @@ export class DialogSchedulerPlan extends LitElement {
   private _rejoinGroup(track: string) {
     this._updatePlan({ detaches: this._plan.detaches.filter(d => d.track != track) });
     this._selected = this._plan.groups[0]?.cubes[0]?.id ?? null;
+  }
+
+  private _setMembers(group: PlanGroup, entities: string[]) {
+    this._updatePlan({
+      groups: this._plan.groups.map(g => (g.track == group.track ? { ...g, entities } : g)),
+      // a device that left the group has nothing to be detached from
+      detaches: this._plan.detaches.filter(
+        d => entities.includes(d.entity)
+          || this._plan.groups.some(other => other.track != group.track && other.entities.includes(d.entity))
+      ),
+    });
   }
 
   // --- saving --------------------------------------------------------------
@@ -373,8 +555,6 @@ export class DialogSchedulerPlan extends LitElement {
   private async _delete() {
     if (this._base.schedule_id) {
       await deleteSchedule(this.hass, this._base.schedule_id).catch(e => this._reportError(e));
-      this.closeDialog();
-      return;
     }
     this.closeDialog();
   }
@@ -403,12 +583,11 @@ export class DialogSchedulerPlan extends LitElement {
         </ha-dialog-header>
 
         <div class="content">
-          ${this._renderHeader()}
-          ${this._bandStart && this._bandEnd ? this._renderBand() : this._renderMissingAnchors()}
-          ${this._renderInspector()}
+          ${this._wizardStep !== null ? this._renderWizard() : this._renderEditor()}
           ${this._error ? html`<div class="error">${this._error}</div>` : nothing}
         </div>
 
+        ${this._wizardStep !== null ? nothing : html`
         <div class="buttons" slot="footer">
           <ha-button appearance="plain" variant="danger" @click=${this._delete} ?disabled=${!this._base.schedule_id}>
             ${hassLocalize('ui.common.delete', this.hass)}
@@ -416,20 +595,42 @@ export class DialogSchedulerPlan extends LitElement {
           <ha-button appearance="plain" @click=${this._save} class="save">
             ${hassLocalize('ui.common.save', this.hass)}
           </ha-button>
-        </div>
+        </div>`}
       </ha-dialog>
+    `;
+  }
+
+  private _renderEditor() {
+    return html`
+      ${this._renderHeader()}
+      ${this._offerWizard ? this._renderWizardOffer() : nothing}
+      ${this._help ? this._renderHelp() : nothing}
+      ${this._bandStart && this._bandEnd ? this._renderBand() : this._renderMissingAnchors()}
+      ${this._renderInspector()}
     `;
   }
 
   private _renderHeader() {
     return html`
       <div class="plan-header">
-        <input
-          class="plan-name"
-          .value=${this._plan.name}
-          placeholder=${this._t('title')}
-          @input=${(ev: Event) => this._updatePlan({ name: (ev.target as HTMLInputElement).value })}
-        />
+        <div class="plan-title">
+          <input
+            class="plan-name"
+            .value=${this._plan.name}
+            placeholder=${this._t('title')}
+            @input=${(ev: Event) => this._updatePlan({ name: (ev.target as HTMLInputElement).value })}
+          />
+          <button
+            class="icon-only ${this._help ? 'active' : ''}"
+            title=${this._t('help.open')}
+            @click=${() => { this._help = !this._help; }}
+          >
+            <ha-svg-icon .path=${mdiHelpCircleOutline}></ha-svg-icon>
+          </button>
+          <button class="ghost" @click=${() => { this._wizardStep = 0; }}>
+            <ha-svg-icon .path=${mdiWizardHat}></ha-svg-icon>${this._t('wizard.open')}
+          </button>
+        </div>
         <div class="anchors">
           <div class="anchor">
             <span class="anchor-label">${this._t('anchor.opens')}</span>
@@ -441,6 +642,29 @@ export class DialogSchedulerPlan extends LitElement {
             <span class="anchor-value">${this._formatMoment(`${this._plan.endAnchor}+00:00:00`)}</span>
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  private _renderWizardOffer() {
+    return html`
+      <div class="offer">
+        <span>${this._t('wizard.offer')}</span>
+        <div class="offer-actions">
+          <button class="ghost primary" @click=${() => { this._wizardStep = 0; }}>${this._t('wizard.offer_yes')}</button>
+          <button class="ghost" @click=${() => { this._offerWizard = false; }}>${this._t('wizard.offer_no')}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderHelp() {
+    return html`
+      <div class="help">
+        <p>${this._t('help.band')}</p>
+        <p>${this._t('help.rows')}</p>
+        <p>${this._t('help.detach')}</p>
+        <p>${this._t('help.keys')}</p>
       </div>
     `;
   }
@@ -484,27 +708,77 @@ export class DialogSchedulerPlan extends LitElement {
           <span class="row-name">${group.name}</span>
           <span class="row-meta">${this._t('group.members', '{n}', String(group.entities.length))}</span>
         </div>
-        <div class="track">
+        <div
+          class="track"
+          @pointermove=${this._handleDragMove}
+          @pointerup=${this._handleDragEnd}
+          @pointercancel=${this._handleDragEnd}
+        >
           ${group.cubes.map(cube => this._renderCube(group, cube))}
+          ${group.cubes.slice(1).map((cube, i) => this._renderHandle(group, i + 1, cube))}
         </div>
       </div>
     `;
   }
 
-  private _renderCube(_group: PlanGroup, cube: PlanCube) {
+  /** the grab area on the line between two stretches */
+  private _renderHandle(group: PlanGroup, index: number, cube: PlanCube) {
+    const at = this._position(cube.start);
+    if (at === null) return nothing;
+    return html`
+      <div
+        class="handle"
+        style="inset-inline-start:${(at * 100).toFixed(3)}%"
+        title=${this._formatMoment(cube.start)}
+        @pointerdown=${(ev: PointerEvent) => this._handleDragStart(ev, group.track, index)}
+        @pointermove=${this._handleDragMove}
+        @pointerup=${this._handleDragEnd}
+      ></div>
+    `;
+  }
+
+  /** an explicit colour wins; otherwise the action decides, as it does on the bar */
+  private _cubeStyle(cube: PlanCube) {
+    if (cube.color) {
+      return `background:${cube.color};color:#fff`;
+    }
+    const fromAction = computeActionColor(cube.action);
+    if (fromAction) {
+      const [r, g, b] = fromAction.rgb;
+      return `background:rgba(${r},${g},${b},${fromAction.alpha})`;
+    }
+    return '';
+  }
+
+  private _renderCube(group: PlanGroup, cube: PlanCube) {
     const from = this._position(cube.start);
     const to = this._position(cube.stop);
     if (from === null || to === null || to <= from) return nothing;
 
     const off = isOffAction(cube.action);
+    const selected = this._selected == cube.id;
     return html`
       <button
-        class="cube ${off ? 'off' : 'on'} ${this._selected == cube.id ? 'selected' : ''}"
-        style="inset-inline-start:${(from * 100).toFixed(3)}%;width:${((to - from) * 100).toFixed(3)}%"
+        class="cube ${off ? 'off' : 'on'} ${selected ? 'selected' : ''}"
+        style="inset-inline-start:${(from * 100).toFixed(3)}%;width:${((to - from) * 100).toFixed(3)}%;${this._cubeStyle(cube)}"
         title="${this._formatMoment(cube.start)} – ${this._formatMoment(cube.stop)}"
         @click=${() => { this._selected = cube.id; }}
       >
         <span class="cube-name">${cube.name || this._t('cube.unnamed')}</span>
+        ${selected ? html`
+        <span class="cube-tools">
+          <span
+            class="cube-tool"
+            title=${this._t('cube.split')}
+            @click=${(ev: Event) => { ev.stopPropagation(); this._splitCube(group, cube); }}
+          ><ha-svg-icon .path=${mdiPlus}></ha-svg-icon></span>
+          ${group.cubes.length > 1 ? html`
+          <span
+            class="cube-tool"
+            title=${hassLocalize('ui.common.delete', this.hass)}
+            @click=${(ev: Event) => { ev.stopPropagation(); this._removeCube(group, cube); }}
+          ><ha-svg-icon .path=${mdiClose}></ha-svg-icon></span>` : nothing}
+        </span>` : nothing}
       </button>
     `;
   }
@@ -541,10 +815,10 @@ export class DialogSchedulerPlan extends LitElement {
   private _renderInspector() {
     const selectedCube = this._selectedCube();
     const selectedDetach = this._selectedDetach();
-    if (!selectedCube && !selectedDetach) return nothing;
-
     if (selectedDetach) return this._renderDetachInspector(selectedDetach);
-    const { group, cube } = selectedCube!;
+    if (!selectedCube) return nothing;
+
+    const { group, cube } = selectedCube;
 
     return html`
       <div class="inspector">
@@ -585,6 +859,7 @@ export class DialogSchedulerPlan extends LitElement {
             },
           })
         )}
+          ${this._renderColorField(cube.color, color => this._updateCube(group.track, cube.id, { color }))}
         </div>
 
         <div class="members">
@@ -596,6 +871,8 @@ export class DialogSchedulerPlan extends LitElement {
             multiple
             @value-changed=${(ev: CustomEvent) => this._setMembers(group, ev.detail.value)}
           ></scheduler-entity-picker>
+          ${group.entities.length ? html`
+          <span class="hint">${this._t('detach.hint')}</span>
           <div class="member-chips">
             ${group.entities.map(
           entity => html`
@@ -605,7 +882,7 @@ export class DialogSchedulerPlan extends LitElement {
               </button>
             `
         )}
-          </div>
+          </div>` : nothing}
           ${this._plan.groups.length > 1
         ? html`<button class="ghost danger" @click=${() => this._removeGroup(group.track)}>
               ${this._t('group.remove')}
@@ -660,54 +937,74 @@ export class DialogSchedulerPlan extends LitElement {
         this._updateDetach(detach.track, { start_date: value, end_date: value });
       }}
             />
+            <span class="field-resolved">${this._t('detach.once_hint')}</span>
           </label>
         </div>
       </div>
     `;
   }
 
+  /** the anchors on offer, plus whatever this boundary already points at */
+  private _anchorOptions(current: string) {
+    const options = [
+      { value: this._plan.startAnchor, label: this._t('anchor.opens') },
+      { value: this._plan.endAnchor, label: this._t('anchor.closes') },
+    ];
+    if (current && !options.some(o => o.value == current)) {
+      options.push({
+        value: current,
+        label: this.hass.states[current]?.attributes.friendly_name || current,
+      });
+    }
+    options.push({ value: '', label: this._t('anchor.fixed') });
+    return options;
+  }
+
   private _renderBoundaryField(label: string, value: string, onChange: (value: string) => void) {
     const parts = this._boundaryParts(value);
     const commit = (changes: Partial<BoundaryParts>) => onChange(this._boundaryString({ ...parts, ...changes }));
 
+    const modes: { value: BoundaryMode; label: string }[] = [
+      { value: 'exact', label: this._t('boundary.exact') },
+      { value: 'offset', label: this._t('boundary.offset') },
+      { value: 'clock', label: this._t('boundary.clock') },
+    ];
+
     return html`
-      <div class="field">
+      <div class="field boundary">
         <span class="field-label">${label}</span>
+
+        <select
+          class="anchor-select"
+          @change=${(ev: Event) => {
+        const anchor = (ev.target as HTMLSelectElement).value;
+        // a boundary with no anchor is a plain clock time, nothing else
+        commit({ anchor, mode: anchor ? parts.mode : 'clock' });
+      }}
+        >
+          ${this._anchorOptions(parts.anchor).map(
+        option => html`<option value=${option.value} ?selected=${option.value == parts.anchor}>${option.label}</option>`
+      )}
+        </select>
+
+        ${parts.anchor ? html`
+        <div class="segmented modes">
+          ${modes.map(
+        mode => html`
+            <button
+              class=${parts.mode == mode.value ? 'active' : ''}
+              @click=${() => commit({ mode: mode.value })}
+            >${mode.label}</button>`
+      )}
+        </div>` : nothing}
+
+        ${parts.anchor && parts.mode == 'exact' ? nothing : html`
         <div class="field-row">
-          <select
-            class="anchor-select"
-            .value=${parts.anchor}
-            @change=${(ev: Event) => commit({ anchor: (ev.target as HTMLSelectElement).value as BoundaryAnchor })}
-          >
-            <option value="start" ?selected=${parts.anchor == 'start'}>${this._t('anchor.opens')}</option>
-            <option value="end" ?selected=${parts.anchor == 'end'}>${this._t('anchor.closes')}</option>
-            <option value="fixed" ?selected=${parts.anchor == 'fixed'}>${this._t('anchor.fixed')}</option>
-          </select>
-
-          ${parts.anchor == 'fixed'
-        ? nothing
-        : html`
-          <select
-            class="mode-select"
-            .value=${parts.mode}
-            @change=${(ev: Event) => commit({ mode: (ev.target as HTMLSelectElement).value as BoundaryMode })}
-          >
-            <option value="clock" ?selected=${parts.mode == 'clock'}>${this._t('boundary.at_clock')}</option>
-            <option value="offset" ?selected=${parts.mode == 'offset'}>${this._t('boundary.offset')}</option>
-          </select>
-        `}
-
-          ${parts.anchor != 'fixed' && parts.mode == 'offset'
-        ? html`
+          ${parts.anchor && parts.mode == 'offset' ? html`
           <button
             class="sign ${parts.before ? 'before' : 'after'}"
             @click=${() => commit({ before: !parts.before })}
-          >
-            ${parts.before ? this._t('boundary.before') : this._t('boundary.after')}
-          </button>
-        `
-        : nothing}
-
+          >${parts.before ? this._t('boundary.before') : this._t('boundary.after')}</button>` : nothing}
           <input
             type="time"
             class="time-input"
@@ -717,8 +1014,9 @@ export class DialogSchedulerPlan extends LitElement {
         commit({ hours: hours || 0, minutes: minutes || 0 });
       }}
           />
-        </div>
-        <span class="field-resolved">${this._formatMoment(value)}</span>
+        </div>`}
+
+        <span class="field-resolved">→ ${this._formatMoment(value)}</span>
       </div>
     `;
   }
@@ -735,14 +1033,153 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
-  private _setMembers(group: PlanGroup, entities: string[]) {
+  private _renderColorField(color: string | undefined, onChange: (color: string | undefined) => void) {
+    return html`
+      <div class="field">
+        <span class="field-label">${this._t('color.label')}</span>
+        <div class="swatches">
+          <button
+            class="swatch auto ${color ? '' : 'active'}"
+            title=${this._t('color.auto')}
+            @click=${() => onChange(undefined)}
+          >A</button>
+          ${PALETTE.map(
+      value => html`
+            <button
+              class="swatch ${color == value ? 'active' : ''}"
+              style="background:${value}"
+              @click=${() => onChange(value)}
+            ></button>`
+    )}
+        </div>
+      </div>
+    `;
+  }
+
+  // --- the wizard ----------------------------------------------------------
+  //
+  // A way in for somebody who does not want to think about anchors at all. It
+  // never replaces the editor: it builds a plan and hands it straight over.
+
+  private get _wizardSteps() {
+    return ['intro', 'devices', 'candle', 'night', 'morning'];
+  }
+
+  private _renderWizard() {
+    const step = this._wizardSteps[this._wizardStep!];
+    const last = this._wizardStep == this._wizardSteps.length - 1;
+
+    return html`
+      <div class="wizard">
+        <div class="wizard-progress">
+          ${this._wizardSteps.map((_s, i) => html`<span class="dot ${i <= this._wizardStep! ? 'done' : ''}"></span>`)}
+        </div>
+
+        <h2 class="wizard-title">${this._t(`wizard.${step}.title`)}</h2>
+        <p class="wizard-body">${this._t(`wizard.${step}.body`)}</p>
+
+        ${step == 'devices' ? html`
+        <scheduler-entity-picker
+          .hass=${this.hass}
+          .config=${this._params!.cardConfig}
+          .value=${this._wizard.entities}
+          multiple
+          @value-changed=${(ev: CustomEvent) => { this._wizard = { ...this._wizard, entities: ev.detail.value }; }}
+        ></scheduler-entity-picker>` : nothing}
+
+        ${step == 'candle' ? html`
+        <div class="segmented big">
+          <button
+            class=${this._wizard.onAtCandleLighting ? 'active' : ''}
+            @click=${() => { this._wizard = { ...this._wizard, onAtCandleLighting: true }; }}
+          >${this._t('state.on')}</button>
+          <button
+            class=${this._wizard.onAtCandleLighting ? '' : 'active'}
+            @click=${() => { this._wizard = { ...this._wizard, onAtCandleLighting: false }; }}
+          >${this._t('state.off')}</button>
+        </div>` : nothing}
+
+        ${step == 'night' ? this._renderWizardTimeStep('hasNightOff', 'nightOff') : nothing}
+        ${step == 'morning' ? this._renderWizardTimeStep('hasMorningOn', 'morningOn') : nothing}
+
+        <div class="wizard-buttons">
+          <button class="ghost" @click=${() => {
+        if (this._wizardStep! > 0) this._wizardStep = this._wizardStep! - 1;
+        else this._wizardStep = null;
+      }}>
+            ${this._wizardStep! > 0 ? this._t('wizard.back') : hassLocalize('ui.common.cancel', this.hass)}
+          </button>
+          <button
+            class="ghost primary"
+            ?disabled=${step == 'devices' && !this._wizard.entities.length}
+            @click=${() => (last ? this._finishWizard() : (this._wizardStep = this._wizardStep! + 1))}
+          >
+            ${last ? this._t('wizard.finish') : this._t('wizard.next')}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderWizardTimeStep(flag: 'hasNightOff' | 'hasMorningOn', field: 'nightOff' | 'morningOn') {
+    const enabled = this._wizard[flag];
+    return html`
+      <div class="wizard-row">
+        <div class="segmented big">
+          <button class=${enabled ? 'active' : ''} @click=${() => { this._wizard = { ...this._wizard, [flag]: true }; }}>
+            ${this._t('wizard.yes')}
+          </button>
+          <button class=${enabled ? '' : 'active'} @click=${() => { this._wizard = { ...this._wizard, [flag]: false }; }}>
+            ${this._t('wizard.no')}
+          </button>
+        </div>
+        ${enabled ? html`
+        <input
+          type="time"
+          class="time-input"
+          .value=${this._wizard[field]}
+          @change=${(ev: Event) => { this._wizard = { ...this._wizard, [field]: (ev.target as HTMLInputElement).value }; }}
+        />` : nothing}
+      </div>
+    `;
+  }
+
+  /** turn the answers into a plan and hand it to the editor */
+  private _finishWizard() {
+    const answers = this._wizard;
+    const start = this._plan.startAnchor;
+    const end = this._plan.endAnchor;
+    const domain = answers.entities[0]?.split('.')[0] || 'switch';
+    const act = (on: boolean) => ({ service: `${domain}.turn_${on ? 'on' : 'off'}`, service_data: {} });
+
+    const boundaries: { at: string; on: boolean; name: string }[] = [
+      { at: `${start}+00:00:00`, on: answers.onAtCandleLighting, name: this._t('cube.welcome') },
+    ];
+    if (answers.hasNightOff) {
+      const [h, m] = answers.nightOff.split(':');
+      boundaries.push({ at: `${start}@${h}:${m}:00`, on: false, name: this._t('cube.night') });
+    }
+    if (answers.hasMorningOn) {
+      const [h, m] = answers.morningOn.split(':');
+      boundaries.push({ at: `${end}@${h}:${m}:00`, on: true, name: this._t('cube.morning') });
+    }
+
+    const track = groupTrack(this._t('group.default'));
+    const cubes: PlanCube[] = boundaries.map((boundary, i) => ({
+      id: `${track}#${i}`,
+      name: boundary.name,
+      start: boundary.at,
+      stop: i + 1 < boundaries.length ? boundaries[i + 1].at : `${end}+00:00:00`,
+      action: act(boundary.on),
+    }));
+
     this._updatePlan({
-      groups: this._plan.groups.map(g => (g.track == group.track ? { ...g, entities } : g)),
-      // a device that left the group has nothing to be detached from
-      detaches: this._plan.detaches.filter(
-        d => entities.includes(d.entity) || this._plan.groups.some(other => other.track != group.track && other.entities.includes(d.entity))
-      ),
+      groups: [{ track, name: this._t('group.default'), entities: answers.entities, cubes }],
+      detaches: [],
     });
+    this._selected = cubes[0].id;
+    this._wizardStep = null;
+    this._offerWizard = false;
   }
 
   static get styles() {
@@ -761,7 +1198,7 @@ export class DialogSchedulerPlan extends LitElement {
         padding: 20px 24px 24px 24px;
         display: flex;
         flex-direction: column;
-        gap: 20px;
+        gap: 18px;
       }
 
       /* --- header --- */
@@ -772,6 +1209,7 @@ export class DialogSchedulerPlan extends LitElement {
         gap: 16px;
         flex-wrap: wrap;
       }
+      .plan-title { display: flex; align-items: center; gap: 8px; }
       .plan-name {
         font-size: 24px;
         font-weight: 600;
@@ -781,17 +1219,13 @@ export class DialogSchedulerPlan extends LitElement {
         border: none;
         border-bottom: 2px solid transparent;
         padding: 2px 0;
-        min-width: 200px;
+        min-width: 180px;
         outline: none;
       }
       .plan-name:hover { border-bottom-color: var(--divider-color); }
       .plan-name:focus { border-bottom-color: var(--primary-color); }
 
-      .anchors {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-      }
+      .anchors { display: flex; align-items: center; gap: 12px; }
       .anchor {
         display: flex;
         flex-direction: column;
@@ -823,6 +1257,32 @@ export class DialogSchedulerPlan extends LitElement {
         );
       }
 
+      /* --- the offer and the help --- */
+      .offer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        border-radius: var(--plan-radius);
+        background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
+        font-size: 14px;
+        color: var(--primary-text-color);
+      }
+      .offer-actions { display: flex; gap: 8px; }
+      .help {
+        border-inline-start: 3px solid var(--primary-color);
+        background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.05);
+        border-radius: 8px;
+        padding: 12px 16px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--primary-text-color);
+      }
+      .help p { margin: 0 0 8px 0; }
+      .help p:last-child { margin-bottom: 0; }
+
       /* --- the band --- */
       .band {
         border-radius: var(--plan-radius);
@@ -848,12 +1308,7 @@ export class DialogSchedulerPlan extends LitElement {
         font-variant-numeric: tabular-nums;
         color: var(--secondary-text-color);
       }
-      .row {
-        display: flex;
-        align-items: stretch;
-        gap: 8px;
-        min-height: 52px;
-      }
+      .row { display: flex; align-items: stretch; gap: 8px; min-height: 52px; }
       .row-label {
         width: 124px;
         flex: 0 0 124px;
@@ -870,14 +1325,12 @@ export class DialogSchedulerPlan extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .row-meta {
-        font-size: 11px;
-        color: var(--secondary-text-color);
-      }
+      .row-meta { font-size: 11px; color: var(--secondary-text-color); }
       .track {
         position: relative;
         flex: 1;
         border-radius: 10px;
+        touch-action: none;
         background: repeating-linear-gradient(
           to right,
           rgba(var(--rgb-secondary-text-color, 114, 114, 114), 0.05) 0 1px,
@@ -902,30 +1355,19 @@ export class DialogSchedulerPlan extends LitElement {
         display: flex;
         align-items: center;
         justify-content: center;
+        gap: 6px;
         overflow: hidden;
         transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
       }
       .cube:hover { filter: brightness(1.06); }
       .cube.on {
-        background: linear-gradient(
-          160deg,
-          rgba(var(--plan-on), 0.95),
-          rgba(var(--plan-on), 0.75)
-        );
+        background: linear-gradient(160deg, rgba(var(--plan-on), 0.95), rgba(var(--plan-on), 0.75));
       }
       .cube.off {
-        background: linear-gradient(
-          160deg,
-          rgba(var(--plan-off), 0.55),
-          rgba(var(--plan-off), 0.38)
-        );
+        background: linear-gradient(160deg, rgba(var(--plan-off), 0.55), rgba(var(--plan-off), 0.38));
       }
       .cube.detach {
-        background: linear-gradient(
-          160deg,
-          rgba(var(--plan-detach), 0.95),
-          rgba(var(--plan-detach), 0.7)
-        );
+        background: linear-gradient(160deg, rgba(var(--plan-detach), 0.95), rgba(var(--plan-detach), 0.7));
         color: #1a1200;
       }
       .cube.selected {
@@ -939,10 +1381,43 @@ export class DialogSchedulerPlan extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
-
-      .row-actions {
-        margin-inline-start: 132px;
+      .cube-tools { display: inline-flex; gap: 2px; flex: 0 0 auto; }
+      .cube-tool {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.22);
       }
+      .cube-tool:hover { background: rgba(0, 0, 0, 0.38); }
+      .cube-tool ha-svg-icon { --mdc-icon-size: 14px; width: 14px; height: 14px; }
+
+      /* the grab line between two stretches, as on the ordinary time bar */
+      .handle {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 14px;
+        margin-inline-start: -7px;
+        cursor: ew-resize;
+        touch-action: none;
+        z-index: 2;
+      }
+      .handle::after {
+        content: '';
+        position: absolute;
+        top: 8px;
+        bottom: 8px;
+        inset-inline-start: 6px;
+        width: 2px;
+        border-radius: 2px;
+        background: transparent;
+      }
+      .handle:hover::after { background: rgba(255, 255, 255, 0.85); }
+
+      .row-actions { margin-inline-start: 132px; }
 
       /* --- inspector --- */
       .inspector {
@@ -979,21 +1454,16 @@ export class DialogSchedulerPlan extends LitElement {
       .cube-title:hover { border-bottom-color: var(--divider-color); }
       .cube-title:focus { border-bottom-color: var(--primary-color); }
       .inspector-actions { display: flex; gap: 8px; }
-      .detach-note {
-        font-size: 13px;
-        color: var(--secondary-text-color);
-        margin-top: -8px;
-      }
+      .detach-note { font-size: 13px; color: var(--secondary-text-color); margin-top: -8px; }
+      .hint { font-size: 12px; color: var(--secondary-text-color); }
 
-      .fields {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 16px;
-      }
-      .field {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
+      .fields { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+      .field { display: flex; flex-direction: column; gap: 6px; }
+      .field.boundary {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: var(--card-background-color);
+        border: 1px solid var(--divider-color);
       }
       .field-label {
         font-size: 11px;
@@ -1025,6 +1495,7 @@ export class DialogSchedulerPlan extends LitElement {
         border: 1px solid var(--divider-color);
         border-radius: 8px;
         overflow: hidden;
+        align-self: flex-start;
       }
       .segmented button {
         font: inherit;
@@ -1032,14 +1503,17 @@ export class DialogSchedulerPlan extends LitElement {
         border: none;
         background: var(--card-background-color);
         color: var(--secondary-text-color);
-        padding: 7px 14px;
+        padding: 7px 12px;
         cursor: pointer;
+        white-space: nowrap;
       }
       .segmented button.active {
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         font-weight: 600;
       }
+      .segmented.big button { font-size: 15px; padding: 12px 28px; }
+      .segmented.modes button { font-size: 12px; padding: 6px 10px; }
       .sign {
         font: inherit;
         font-size: 13px;
@@ -1050,6 +1524,22 @@ export class DialogSchedulerPlan extends LitElement {
         padding: 7px 10px;
         cursor: pointer;
       }
+
+      .swatches { display: flex; gap: 6px; }
+      .swatch {
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        border: 1px solid var(--divider-color);
+        cursor: pointer;
+        padding: 0;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--secondary-text-color);
+        background: var(--card-background-color);
+      }
+      .swatch.active { box-shadow: 0 0 0 2px var(--card-background-color), 0 0 0 4px var(--primary-color); }
 
       .members { display: flex; flex-direction: column; gap: 8px; }
       .members > label {
@@ -1073,13 +1563,9 @@ export class DialogSchedulerPlan extends LitElement {
         cursor: pointer;
       }
       .chip:hover { border-color: rgba(var(--plan-detach), 0.8); }
-      .chip-action {
-        font-size: 11px;
-        color: rgba(var(--plan-detach), 1);
-        font-weight: 600;
-      }
+      .chip-action { font-size: 11px; color: rgba(var(--plan-detach), 1); font-weight: 600; }
 
-      .ghost {
+      .ghost, .icon-only {
         font: inherit;
         font-size: 13px;
         display: inline-flex;
@@ -1092,10 +1578,62 @@ export class DialogSchedulerPlan extends LitElement {
         padding: 6px 12px;
         cursor: pointer;
       }
-      .ghost:hover { background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08); }
+      .icon-only { padding: 6px; }
+      .icon-only.active { background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.15); }
+      .ghost:hover, .icon-only:hover { background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08); }
       .ghost[disabled] { opacity: 0.4; cursor: default; }
       .ghost.danger { color: var(--error-color, #db4437); }
-      .ghost ha-svg-icon { --mdc-icon-size: 18px; width: 18px; height: 18px; }
+      .ghost.primary {
+        background: var(--primary-color);
+        border-color: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+        font-weight: 600;
+      }
+      .ghost ha-svg-icon, .icon-only ha-svg-icon {
+        --mdc-icon-size: 18px;
+        width: 18px;
+        height: 18px;
+      }
+
+      /* --- wizard --- */
+      .wizard {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        align-items: flex-start;
+        min-height: 320px;
+        padding: 8px 0;
+        /* the buttons belong beside the question, not at the far edge of a
+           wide dialog */
+        width: 100%;
+        max-width: 640px;
+        margin-inline: auto;
+      }
+      .wizard-progress { display: flex; gap: 6px; }
+      .dot {
+        width: 28px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--divider-color);
+      }
+      .dot.done { background: var(--primary-color); }
+      .wizard-title { font-size: 22px; font-weight: 600; margin: 0; color: var(--primary-text-color); }
+      .wizard-body {
+        font-size: 15px;
+        line-height: 1.6;
+        margin: 0;
+        color: var(--secondary-text-color);
+        max-width: 52ch;
+      }
+      .wizard-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .wizard-buttons {
+        display: flex;
+        gap: 8px;
+        margin-top: auto;
+        padding-top: 16px;
+        align-self: stretch;
+        justify-content: space-between;
+      }
 
       .empty {
         border: 1px dashed var(--divider-color);
@@ -1106,10 +1644,7 @@ export class DialogSchedulerPlan extends LitElement {
       .empty-title { font-size: 16px; font-weight: 600; color: var(--primary-text-color); }
       .empty-body { font-size: 13px; color: var(--secondary-text-color); margin-top: 6px; }
 
-      .error {
-        color: var(--error-color, #db4437);
-        font-size: 13px;
-      }
+      .error { color: var(--error-color, #db4437); font-size: 13px; }
       .buttons {
         box-sizing: border-box;
         display: flex;

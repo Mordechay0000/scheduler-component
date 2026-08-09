@@ -74,6 +74,7 @@ const parseTimeslot = (input: Timeslot): LegacyTimeslot => {
     start: input.start,
     stop: input.stop,
     name: input.name,
+    color: input.color,
     track: input.track,
     priority: input.priority,
     start_date: input.start_date,

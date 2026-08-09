@@ -28,6 +28,7 @@ export interface LegacyTimeslot {
   track_conditions?: boolean;
   actions: ServiceCall[];
   name?: string | null;
+  color?: string | null;
   track?: string;
   priority?: number;
   start_date?: string | null;
@@ -86,6 +87,7 @@ const parseTimeslot = (input: LegacyTimeslot): Timeslot => {
       track_changes: Boolean(input.track_conditions)
     },
     name: input.name || undefined,
+    color: input.color || undefined,
     track: input.track || undefined,
     priority: input.priority || undefined,
     start_date: input.start_date || undefined,

@@ -117,6 +117,19 @@ It rests on three things the engine can do that a plain schedule does not need:
 All three are ordinary schedule features, usable from `scheduler.add` and
 `scheduler.edit` without the plan editor.
 
+**Not sure where to start?** The editor offers a short guided path — a few
+questions in plain language that build a working plan and then hand it to the
+editor. It is an alternative way in, never a replacement: everything it produces
+is editable afterwards, and the editor is there from the first screen.
+
+### Driving it from a model
+
+[`mcp_server/`](mcp_server/README.md) is an MCP server that exposes the plan in
+the same vocabulary — groups, stretches, exceptions — so a model can read and
+write it without knowing anything about tracks or priorities. Times are written
+the way a person says them: `candle_lighting`, `havdalah-30m`,
+`havdalah@06:30`.
+
 ## Documentation
 
 * [Card usage & configuration](docs/card.md) — creating schedules and time schemes, card options, `customize`, display options, tags, translations, tips & tricks, troubleshooting.
@@ -154,6 +167,8 @@ If you want to make a donation as appreciation of the work on this project, you 
 * **עוגן מבוסס-ישות** – זמן הלכתי אינו היסט קבוע מהשקיעה האסטרונומית, ולכן הוא נקרא מהישות מחדש בכל הפעלה. למשל `sensor.jewish_calendar_upcoming_candle_lighting-00:18:00`. נדרשת אינטגרציית [Jewish Calendar](https://www.home-assistant.io/integrations/jewish_calendar/).
 * **שעה קבועה ביום של עוגן** – `‎…upcoming_havdalah@06:30:00` היא 06:30 בבוקר שבו הפס נגמר, יהיה זה איזה יום שיהיה. כך הגבולות הפנימיים נשארים בתוך הפס גם ביום טוב, שאף כלל ימים בשבוע לא יכול לתאר.
 * **מסלולים עצמאיים** – לכל קבוצה מחיצת זמנים משלה, ולכן גבול שנועד למכשיר אחד אינו מפצל את השאר. מכשיר שמתנתק מקבל מסלול בעדיפות גבוהה יותר: כל עוד הניתוק פועל הקבוצה לא נוגעת בו (גם אחרי הפעלה מחדש), וכשהוא נגמר הקבוצה מחזירה אותו אליה.
+* **אשף מודרך** – מי שלא רוצה להתעסק בעוגנים והיסטים עונה על כמה שאלות בשפה פשוטה ומקבל תוכנית עובדת. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
+* **שרת MCP** – התיקייה [`mcp_server/`](mcp_server/README.md) חושפת את התוכנית לפי אותו אוצר מילים (קבוצות, קוביות, חריגים), כך שמודל שפה יכול לקרוא ולכתוב אותה בלי לדעת דבר על מסלולים ועדיפויות.
 
 **עורך התזמון (Time scheme) המשופר:**
 

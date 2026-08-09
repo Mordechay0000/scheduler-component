@@ -52,6 +52,8 @@ class TimeslotEntry:
     actions = attr.ib(type=[ActionEntry], default=[])
     # a label for the slot, so a plan can name the stretches it is made of
     name = attr.ib(type=str, default=None)
+    # how it is drawn; the engine never reads it
+    color = attr.ib(type=str, default=None)
     # a period of its own, narrowing the schedule's - a one-off exception is a
     # slot that stops coming back once its day has passed
     start_date = attr.ib(type=str, default=None)
@@ -168,6 +170,7 @@ class MigratableStore(Store):
                         const.ATTR_TIMESLOTS: [
                             {
                                 ATTR_NAME: None,
+                                const.ATTR_COLOR: None,
                                 const.ATTR_TRACK: const.DEFAULT_TRACK,
                                 const.ATTR_PRIORITY: const.DEFAULT_PRIORITY,
                                 const.ATTR_START_DATE: None,
@@ -268,6 +271,7 @@ class ScheduleStorage:
                     const.ATTR_TRACK_CONDITIONS: slot.track_conditions,
                     const.ATTR_ACTIONS: [],
                     ATTR_NAME: slot.name,
+                    const.ATTR_COLOR: slot.color,
                     const.ATTR_TRACK: slot.track,
                     const.ATTR_PRIORITY: slot.priority,
                     const.ATTR_START_DATE: slot.start_date,
