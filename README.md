@@ -117,10 +117,13 @@ It rests on three things the engine can do that a plain schedule does not need:
 All three are ordinary schedule features, usable from `scheduler.add` and
 `scheduler.edit` without the plan editor.
 
-**Not sure where to start?** The editor offers a short guided path — a few
-questions in plain language that build a working plan and then hand it to the
-editor. It is an alternative way in, never a replacement: everything it produces
-is editable afterwards, and the editor is there from the first screen.
+**Not sure where to start?** The editor offers a guided path in plain language:
+pick the devices, say what happens when Shabbat comes in, then build the day out
+of named moments — Friday night dinner, bedtime, morning, lunch, a nap, or
+anything else you add — each saying what happens from then until the next. It
+reads the whole day back before building anything. It is an alternative way in,
+never a replacement: everything it produces is editable afterwards, and the
+editor is there from the first screen.
 
 ### Driving it from a model
 
@@ -197,7 +200,7 @@ If you want to make a donation as appreciation of the work on this project, you 
 * **עוגן מבוסס-ישות** – זמן הלכתי אינו היסט קבוע מהשקיעה האסטרונומית, ולכן הוא נקרא מהישות מחדש בכל הפעלה. למשל `sensor.jewish_calendar_upcoming_candle_lighting-00:18:00`. נדרשת אינטגרציית [Jewish Calendar](https://www.home-assistant.io/integrations/jewish_calendar/).
 * **שעה קבועה ביום של עוגן** – `‎…upcoming_havdalah@06:30:00` היא 06:30 בבוקר שבו הפס נגמר, יהיה זה איזה יום שיהיה. כך הגבולות הפנימיים נשארים בתוך הפס גם ביום טוב, שאף כלל ימים בשבוע לא יכול לתאר.
 * **מסלולים עצמאיים** – לכל קבוצה מחיצת זמנים משלה, ולכן גבול שנועד למכשיר אחד אינו מפצל את השאר. מכשיר שמתנתק מקבל מסלול בעדיפות גבוהה יותר: כל עוד הניתוק פועל הקבוצה לא נוגעת בו (גם אחרי הפעלה מחדש), וכשהוא נגמר הקבוצה מחזירה אותו אליה.
-* **אשף מודרך** – מי שלא רוצה להתעסק בעוגנים והיסטים עונה על כמה שאלות בשפה פשוטה ומקבל תוכנית עובדת. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
+* **אשף מודרך** – בוחרים מכשירים, קובעים מה קורה בכניסת שבת, ואז בונים את היום מזמנים עם שמות: סעודת ליל שבת, שינה, בוקר, סעודת שבת, שנת צהריים — או כל זמן אחר שמוסיפים. כל זמן קובע מה קורה ממנו ועד הבא אחריו, ובסוף האשף מקריא את היום כולו לבדיקה לפני שהוא בונה משהו. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
 * **תמיכה במודלי שפה** – האינטגרציה רושמת LLM API בשם ״Shabbat plans״, ולכן אין שרת נפרד להריץ. Home Assistant מגיש אותו גם דרך אינטגרציית [MCP Server](https://www.home-assistant.io/integrations/mcp_server/) בכתובת `/api/mcp/scheduler_shabbat`, וגם ל-Assist ולכל סוכן שיחה (Anthropic, OpenAI, Google, Ollama). הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
 
 **עורך התזמון (Time scheme) המשופר:**

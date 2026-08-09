@@ -371,13 +371,32 @@
             "title": "At candle lighting",
             "body": "When Shabbat comes in, should these devices be on or off? The exact time is read from the Jewish Calendar every week, so it follows the season on its own."
           },
-          "night": {
-            "title": "Turning off for the night",
-            "body": "Many people turn everything off late on Friday night. Choose a time, or skip this."
+          "night": {},
+          "morning": {},
+          "moments": {
+            "title": "Build your Shabbat",
+            "body": "Add the moments your day is made of - dinner, bedtime, morning, lunch, a nap. Each one says what happens from then until the next. Start from a suggestion or add your own.",
+            "add": "Add a moment",
+            "name": "Name it",
+            "empty": "No moments yet - the devices will simply hold their opening state until Shabbat goes out."
           },
-          "morning": {
-            "title": "Back on in the morning",
-            "body": "And back on on Shabbat morning. This is a clock time on the day Shabbat ends, so it lands correctly on a festival too."
+          "when": {
+            "eve": "Shabbat evening",
+            "day": "Shabbat day",
+            "before_end": "before it goes out"
+          },
+          "preset": {
+            "meal_eve": "Friday night dinner",
+            "sleep": "Bedtime",
+            "morning": "Morning",
+            "meal_day": "Shabbat lunch",
+            "nap": "Afternoon nap",
+            "close": "Going out"
+          },
+          "review": {
+            "title": "This is your Shabbat",
+            "body": "Read it through. Anything here can still be changed in the editor afterwards.",
+            "outside": "{names} falls outside the band and was left out. Shabbat evening times must be after candle lighting, and Shabbat day times before havdalah."
           }
         }
       }

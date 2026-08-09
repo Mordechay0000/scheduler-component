@@ -73,6 +73,41 @@ type BoundaryParts = {
   before: boolean;
 };
 
+/**
+ * A moment in the wizard's day.
+ *
+ * Somebody setting up their Shabbat does not think in anchors and offsets;
+ * they think "Friday night dinner at eight, bed at eleven, back on at seven".
+ * So a moment is a name, a side of the band, and a time - and the wizard turns
+ * the list of them into the stretches between them.
+ */
+type WizardWhen = 'eve' | 'day' | 'before_end';
+
+type WizardMoment = {
+  id: string;
+  name: string;
+  when: WizardWhen;
+  /** a clock time for 'eve' and 'day'; a duration for 'before_end' */
+  time: string;
+  on: boolean;
+};
+
+type WizardAnswers = {
+  entities: string[];
+  onAtCandleLighting: boolean;
+  moments: WizardMoment[];
+};
+
+/** starting points, so the common day is a few clicks rather than a form */
+const MOMENT_PRESETS: { key: string; when: WizardWhen; time: string; on: boolean }[] = [
+  { key: 'meal_eve', when: 'eve', time: '20:00', on: true },
+  { key: 'sleep', when: 'eve', time: '23:00', on: false },
+  { key: 'morning', when: 'day', time: '07:00', on: true },
+  { key: 'meal_day', when: 'day', time: '12:00', on: true },
+  { key: 'nap', when: 'day', time: '14:30', on: false },
+  { key: 'close', when: 'before_end', time: '00:30', on: true },
+];
+
 const SNAP_MINUTES = 5;
 
 /** the swatches offered for a stretch, on top of "let the action decide" */
@@ -108,13 +143,10 @@ export class DialogSchedulerPlan extends LitElement {
   /** the wizard is a way in, never the only way: the editor is always there */
   @state() private _wizardStep: number | null = null;
   @state() private _offerWizard = false;
-  @state() private _wizard = {
-    entities: [] as string[],
+  @state() private _wizard: WizardAnswers = {
+    entities: [],
     onAtCandleLighting: true,
-    nightOff: '22:30',
-    hasNightOff: true,
-    morningOn: '06:30',
-    hasMorningOn: true,
+    moments: [],
   };
 
   private _base: Schedule = emptySchedule();
@@ -1062,7 +1094,69 @@ export class DialogSchedulerPlan extends LitElement {
   // never replaces the editor: it builds a plan and hands it straight over.
 
   private get _wizardSteps() {
-    return ['intro', 'devices', 'candle', 'night', 'morning'];
+    return ['intro', 'devices', 'candle', 'moments', 'review'];
+  }
+
+  /** where a moment sits, written the way the engine stores it */
+  private _momentBoundary(moment: WizardMoment) {
+    const [hours, minutes] = moment.time.split(':').map(Number);
+    if (moment.when == 'before_end') {
+      return this._boundaryString({
+        anchor: this._plan.endAnchor,
+        mode: 'offset',
+        hours: hours || 0,
+        minutes: minutes || 0,
+        before: true,
+      });
+    }
+    return this._boundaryString({
+      anchor: moment.when == 'eve' ? this._plan.startAnchor : this._plan.endAnchor,
+      mode: 'clock',
+      hours: hours || 0,
+      minutes: minutes || 0,
+      before: false,
+    });
+  }
+
+  /** the moments in the order they actually happen, and the ones that cannot */
+  private _wizardTimeline() {
+    const start = this._bandStart;
+    const end = this._bandEnd;
+    const placed = this._wizard.moments.map(moment => {
+      const boundary = this._momentBoundary(moment);
+      const at = this._moment(boundary);
+      const inside = !!(at && start && end && at > start && at < end);
+      return { moment, boundary, at, inside };
+    });
+    const inside = placed
+      .filter(entry => entry.inside)
+      .sort((a, b) => a.at!.getTime() - b.at!.getTime());
+    return { inside, outside: placed.filter(entry => !entry.inside) };
+  }
+
+  private _updateMoment(id: string, changes: Partial<WizardMoment>) {
+    this._wizard = {
+      ...this._wizard,
+      moments: this._wizard.moments.map(m => (m.id == id ? { ...m, ...changes } : m)),
+    };
+  }
+
+  private _addMoment(preset?: { key: string; when: WizardWhen; time: string; on: boolean }) {
+    const moment: WizardMoment = {
+      id: `m${this._wizard.moments.length}-${preset?.key || 'new'}`,
+      name: preset ? this._t(`wizard.preset.${preset.key}`) : '',
+      when: preset?.when || 'day',
+      time: preset?.time || '12:00',
+      on: preset ? preset.on : true,
+    };
+    this._wizard = { ...this._wizard, moments: [...this._wizard.moments, moment] };
+  }
+
+  private _removeMoment(id: string) {
+    this._wizard = {
+      ...this._wizard,
+      moments: this._wizard.moments.filter(m => m.id != id),
+    };
   }
 
   private _renderWizard() {
@@ -1099,8 +1193,8 @@ export class DialogSchedulerPlan extends LitElement {
           >${this._t('state.off')}</button>
         </div>` : nothing}
 
-        ${step == 'night' ? this._renderWizardTimeStep('hasNightOff', 'nightOff') : nothing}
-        ${step == 'morning' ? this._renderWizardTimeStep('hasMorningOn', 'morningOn') : nothing}
+        ${step == 'moments' ? this._renderWizardMoments() : nothing}
+        ${step == 'review' ? this._renderWizardReview() : nothing}
 
         <div class="wizard-buttons">
           <button class="ghost" @click=${() => {
@@ -1121,55 +1215,141 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
-  private _renderWizardTimeStep(flag: 'hasNightOff' | 'hasMorningOn', field: 'nightOff' | 'morningOn') {
-    const enabled = this._wizard[flag];
+  private _renderWizardMoments() {
+    const used = new Set(this._wizard.moments.map(m => m.name));
+    const suggestions = MOMENT_PRESETS.filter(p => !used.has(this._t(`wizard.preset.${p.key}`)));
+
     return html`
-      <div class="wizard-row">
-        <div class="segmented big">
-          <button class=${enabled ? 'active' : ''} @click=${() => { this._wizard = { ...this._wizard, [flag]: true }; }}>
-            ${this._t('wizard.yes')}
-          </button>
-          <button class=${enabled ? '' : 'active'} @click=${() => { this._wizard = { ...this._wizard, [flag]: false }; }}>
-            ${this._t('wizard.no')}
-          </button>
-        </div>
-        ${enabled ? html`
+      <div class="moment-presets">
+        ${suggestions.map(
+      preset => html`
+          <button class="chip" @click=${() => this._addMoment(preset)}>
+            <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${this._t(`wizard.preset.${preset.key}`)}
+          </button>`
+    )}
+      </div>
+
+      ${this._wizard.moments.length
+        ? html`
+      <div class="moments">
+        ${this._wizard.moments.map(moment => this._renderWizardMoment(moment))}
+      </div>`
+        : html`<p class="wizard-empty">${this._t('wizard.moments.empty')}</p>`}
+
+      <button class="ghost" @click=${() => this._addMoment()}>
+        <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${this._t('wizard.moments.add')}
+      </button>
+    `;
+  }
+
+  private _renderWizardMoment(moment: WizardMoment) {
+    const at = this._moment(this._momentBoundary(moment));
+    return html`
+      <div class="moment">
+        <input
+          class="moment-name"
+          .value=${moment.name}
+          placeholder=${this._t('wizard.moments.name')}
+          @input=${(ev: Event) => this._updateMoment(moment.id, { name: (ev.target as HTMLInputElement).value })}
+        />
+        <select
+          @change=${(ev: Event) =>
+        this._updateMoment(moment.id, { when: (ev.target as HTMLSelectElement).value as WizardWhen })}
+        >
+          <option value="eve" ?selected=${moment.when == 'eve'}>${this._t('wizard.when.eve')}</option>
+          <option value="day" ?selected=${moment.when == 'day'}>${this._t('wizard.when.day')}</option>
+          <option value="before_end" ?selected=${moment.when == 'before_end'}>
+            ${this._t('wizard.when.before_end')}
+          </option>
+        </select>
         <input
           type="time"
           class="time-input"
-          .value=${this._wizard[field]}
-          @change=${(ev: Event) => { this._wizard = { ...this._wizard, [field]: (ev.target as HTMLInputElement).value }; }}
-        />` : nothing}
+          .value=${moment.time}
+          @change=${(ev: Event) => this._updateMoment(moment.id, { time: (ev.target as HTMLInputElement).value })}
+        />
+        <div class="segmented">
+          <button class=${moment.on ? 'active' : ''} @click=${() => this._updateMoment(moment.id, { on: true })}>
+            ${this._t('state.on')}
+          </button>
+          <button class=${moment.on ? '' : 'active'} @click=${() => this._updateMoment(moment.id, { on: false })}>
+            ${this._t('state.off')}
+          </button>
+        </div>
+        <span class="moment-at">${at ? this._formatMoment(this._momentBoundary(moment)) : '—'}</span>
+        <button class="icon-only" title=${hassLocalize('ui.common.delete', this.hass)}
+          @click=${() => this._removeMoment(moment.id)}>
+          <ha-svg-icon .path=${mdiClose}></ha-svg-icon>
+        </button>
       </div>
+    `;
+  }
+
+  /** the day read back as a list, so it can be checked before it is built */
+  private _renderWizardReview() {
+    const { inside, outside } = this._wizardTimeline();
+    const opening = this._t(this._wizard.onAtCandleLighting ? 'state.on' : 'state.off');
+
+    return html`
+      <ol class="review">
+        <li>
+          <span class="review-at">${this._formatMoment(`${this._plan.startAnchor}+00:00:00`)}</span>
+          <span class="review-name">${this._t('cube.welcome')}</span>
+          <span class="review-state ${this._wizard.onAtCandleLighting ? 'on' : 'off'}">${opening}</span>
+        </li>
+        ${inside.map(
+      entry => html`
+        <li>
+          <span class="review-at">${this._formatMoment(entry.boundary)}</span>
+          <span class="review-name">${entry.moment.name || this._t('cube.unnamed')}</span>
+          <span class="review-state ${entry.moment.on ? 'on' : 'off'}">
+            ${this._t(entry.moment.on ? 'state.on' : 'state.off')}
+          </span>
+        </li>`
+    )}
+        <li class="review-end">
+          <span class="review-at">${this._formatMoment(`${this._plan.endAnchor}+00:00:00`)}</span>
+          <span class="review-name">${this._t('anchor.closes')}</span>
+        </li>
+      </ol>
+
+      ${outside.length
+        ? html`<p class="wizard-warning">
+            ${this._t('wizard.review.outside', '{names}',
+      outside.map(e => e.moment.name || this._t('cube.unnamed')).join(', '))}
+          </p>`
+        : nothing}
     `;
   }
 
   /** turn the answers into a plan and hand it to the editor */
   private _finishWizard() {
     const answers = this._wizard;
-    const start = this._plan.startAnchor;
-    const end = this._plan.endAnchor;
     const domain = answers.entities[0]?.split('.')[0] || 'switch';
     const act = (on: boolean) => ({ service: `${domain}.turn_${on ? 'on' : 'off'}`, service_data: {} });
 
-    const boundaries: { at: string; on: boolean; name: string }[] = [
-      { at: `${start}+00:00:00`, on: answers.onAtCandleLighting, name: this._t('cube.welcome') },
+    // a moment is a boundary; the stretches are what lies between them
+    const boundaries = [
+      {
+        at: `${this._plan.startAnchor}+00:00:00`,
+        on: answers.onAtCandleLighting,
+        name: this._t('cube.welcome'),
+      },
+      ...this._wizardTimeline().inside.map(entry => ({
+        at: entry.boundary,
+        on: entry.moment.on,
+        name: entry.moment.name || this._t('cube.unnamed'),
+      })),
     ];
-    if (answers.hasNightOff) {
-      const [h, m] = answers.nightOff.split(':');
-      boundaries.push({ at: `${start}@${h}:${m}:00`, on: false, name: this._t('cube.night') });
-    }
-    if (answers.hasMorningOn) {
-      const [h, m] = answers.morningOn.split(':');
-      boundaries.push({ at: `${end}@${h}:${m}:00`, on: true, name: this._t('cube.morning') });
-    }
 
     const track = groupTrack(this._t('group.default'));
     const cubes: PlanCube[] = boundaries.map((boundary, i) => ({
       id: `${track}#${i}`,
       name: boundary.name,
       start: boundary.at,
-      stop: i + 1 < boundaries.length ? boundaries[i + 1].at : `${end}+00:00:00`,
+      stop: i + 1 < boundaries.length
+        ? boundaries[i + 1].at
+        : `${this._plan.endAnchor}+01:30:00`,
       action: act(boundary.on),
     }));
 
@@ -1626,6 +1806,93 @@ export class DialogSchedulerPlan extends LitElement {
         max-width: 52ch;
       }
       .wizard-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .wizard-empty { font-size: 13px; color: var(--secondary-text-color); margin: 0; }
+      .wizard-warning {
+        font-size: 13px;
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: rgba(var(--plan-detach), 0.12);
+        color: var(--primary-text-color);
+      }
+
+      .moment-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+      .moment-presets .chip ha-svg-icon {
+        --mdc-icon-size: 14px;
+        width: 14px;
+        height: 14px;
+      }
+      .moments { display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
+      .moment {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+      }
+      .moment-name {
+        font: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--primary-text-color);
+        background: none;
+        border: none;
+        border-bottom: 1px solid transparent;
+        outline: none;
+        min-width: 120px;
+        flex: 1;
+        padding: 4px 0;
+      }
+      .moment-name:hover { border-bottom-color: var(--divider-color); }
+      .moment-name:focus { border-bottom-color: var(--primary-color); }
+      .moment-at {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums;
+        min-width: 92px;
+      }
+
+      .review {
+        align-self: stretch;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .review li {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 12px;
+        border-inline-start: 2px solid var(--divider-color);
+      }
+      .review li:first-child { border-start-start-radius: 8px; }
+      .review-at {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums;
+        min-width: 96px;
+      }
+      .review-name { font-size: 14px; font-weight: 600; flex: 1; color: var(--primary-text-color); }
+      .review-state {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 999px;
+      }
+      .review-state.on {
+        background: rgba(var(--plan-on), 0.18);
+        color: rgb(var(--plan-on));
+      }
+      .review-state.off {
+        background: rgba(var(--plan-off), 0.18);
+        color: var(--secondary-text-color);
+      }
+      .review-end { opacity: 0.7; }
       .wizard-buttons {
         display: flex;
         gap: 8px;

@@ -232,11 +232,13 @@ export default async function run() {
     const call = await p.evaluate(async () => {
       const dialog = window.__dialog;
       dialog._wizard = {
-        ...dialog._wizard,
         entities: ['light.salon', 'switch.boiler'],
         onAtCandleLighting: true,
-        hasNightOff: true, nightOff: '22:30',
-        hasMorningOn: true, morningOn: '06:30',
+        moments: [
+          // deliberately out of order: the wizard puts the day in sequence
+          { id: 'a', name: 'בוקר', when: 'day', time: '06:30', on: true },
+          { id: 'b', name: 'שינה', when: 'eve', time: '22:30', on: false },
+        ],
       };
       dialog._finishWizard();
       await dialog.updateComplete;
@@ -247,10 +249,70 @@ export default async function run() {
     const slots = call.data.timeslots;
     s.ok(slots.length === 3, 'the answers become three stretches');
     s.ok(slots[0].start === CANDLE + '+00:00:00', 'the first opens at candle lighting');
-    s.ok(slots[1].start === CANDLE + '@22:30:00', 'the night-off is on the evening the band opened');
+    s.ok(slots[1].start === CANDLE + '@22:30:00', 'bedtime is on the evening the band opened');
     s.ok(slots[2].start === HAVDALAH + '@06:30:00', 'and the morning is on the day it closes');
+    s.ok(slots.map(e => e.name).join() === 'קבלת שבת,שינה,בוקר',
+      'the moments are put in the order they happen, whatever order they were added in');
     s.ok(slots.every(e => [e.actions].flat().some(a => a.entity_id === 'light.salon')),
       'the devices picked in the wizard are the ones acted on');
+  }, JERUSALEM);
+
+  // --- a day of your own, not just the questions we thought to ask ---------
+
+  await withPage(page(), async p => {
+    const call = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizardStep = 3;
+      dialog._wizard = { ...dialog._wizard, entities: ['light.salon'], onAtCandleLighting: true };
+      // the presets are a starting point, and anything can be added by hand
+      dialog._addMoment({ key: 'meal_eve', when: 'eve', time: '20:00', on: true });
+      dialog._addMoment({ key: 'meal_day', when: 'day', time: '12:00', on: true });
+      dialog._addMoment();
+      const own = dialog._wizard.moments[2];
+      dialog._updateMoment(own.id, { name: 'שנת צהריים', when: 'day', time: '14:30', on: false });
+      dialog._addMoment({ key: 'close', when: 'before_end', time: '00:30', on: true });
+      await dialog.updateComplete;
+      dialog._finishWizard();
+      await dialog.updateComplete;
+      await dialog._save();
+      return (window.__apiCalls || []).slice(-1)[0];
+    });
+
+    const slots = call.data.timeslots;
+    s.ok(slots.length === 5, 'a day can have as many moments as it needs');
+    s.ok(slots.map(e => e.name).join() === 'קבלת שבת,סעודת ליל שבת,סעודת שבת,שנת צהריים,מוצאי שבת',
+      'each moment names the stretch that starts at it');
+    s.ok(slots[1].start === CANDLE + '@20:00:00', 'a Shabbat-evening moment sits on the opening day');
+    s.ok(slots[2].start === HAVDALAH + '@12:00:00', 'a Shabbat-day one sits on the closing day');
+    s.ok(slots[4].start === HAVDALAH + '-00:30:00', 'and one can be measured back from havdalah');
+    s.ok(slots[3].actions[0].service.endsWith('turn_off'), 'each moment sets its own state');
+    s.ok(slots[4].stop === HAVDALAH + '+01:30:00', 'the last stretch runs to the end of the band');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const shown = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizard = {
+        entities: ['light.salon'],
+        onAtCandleLighting: true,
+        moments: [
+          { id: 'a', name: 'סעודה', when: 'day', time: '12:00', on: true },
+          // 10:00 on the evening side is before candle lighting: outside the band
+          { id: 'b', name: 'מוקדם מדי', when: 'eve', time: '10:00', on: true },
+        ],
+      };
+      dialog._wizardStep = 4;
+      await dialog.updateComplete;
+      const root = dialog.shadowRoot;
+      return {
+        rows: [...root.querySelectorAll('.review-name')].map(e => e.textContent.trim()),
+        warning: root.querySelector('.wizard-warning')?.textContent.trim() || '',
+      };
+    });
+
+    s.ok(shown.rows.includes('סעודה'), 'the review reads the day back before it is built');
+    s.ok(!shown.rows.includes('מוקדם מדי'), 'a moment outside the band is not drawn into it');
+    s.ok(shown.warning.includes('מוקדם מדי'), 'and the review says which one was left out, by name');
   }, JERUSALEM);
 
   await withPage(page(), async p => {
