@@ -20,13 +20,18 @@ import { isDefined } from "./lib/is_defined";
 
 import './scheduler-card-editor';
 import "./dialogs/dialog-scheduler-editor";
+// the bundle is a single IIFE, so a dialog has to be in it rather than split
+// out into a chunk the integration never serves
+import "./dialogs/dialog-scheduler-plan";
 import "./components/scheduler-item-row";
 import "./components/scheduler-overview-row";
 import "./components/scheduler-overview-ruler";
 import "./components/scheduler-overview-add-row";
 import "./components/scheduler-overview-daybar";
 import { entityIncludedByConfig } from "./data/actions/entity_included_by_config";
-import { mdiViewDayOutline, mdiViewSequentialOutline } from "@mdi/js";
+import { mdiCandle, mdiViewDayOutline, mdiViewSequentialOutline } from "@mdi/js";
+import { isPlan } from "./data/plan/plan_model";
+import { PlanDialogParams } from "./dialogs/dialog-scheduler-plan";
 import { consumeLastOverviewUndo } from "./lib/overview_undo";
 import { useAmPm } from "./lib/use_am_pm";
 
@@ -218,8 +223,16 @@ export class SchedulerCard extends LitElement {
           ${this.overviewMode && this._config.show_clock !== false ? html`<div class="clock">${this._formatClock()}</div>` : ''}
 
           <div class="header-actions">
+          <ha-icon-button
+            class="plan-button"
+            .path=${mdiCandle}
+            .label=${localize('ui.panel.plan.open', this.hass)}
+            @click=${this._planClick}
+          >
+          </ha-icon-button>
           ${this._config.show_view_toggle !== false ? html`
           <ha-icon-button
+            class="view-toggle"
             .path=${this.overviewMode ? mdiViewSequentialOutline : mdiViewDayOutline}
             .label=${this.overviewMode
         ? localize('ui.panel.overview.list_view', this.hass)
@@ -456,8 +469,30 @@ export class SchedulerCard extends LitElement {
       `;
   }
 
+  /** open the plan editor, on the existing plan if there is one */
+  private _planClick(ev: Event) {
+    const existing = (this.schedules || []).find(isPlan);
+    this._openPlanDialog(ev.target as HTMLElement, existing);
+  }
+
+  private _openPlanDialog(target: HTMLElement, schedule?: Schedule) {
+    const params: PlanDialogParams = { schedule, cardConfig: this._config };
+    fireEvent(target, 'show-dialog', {
+      dialogTag: 'dialog-scheduler-plan',
+      dialogImport: () => import('./dialogs/dialog-scheduler-plan'),
+      dialogParams: params,
+    });
+  }
+
   private _handleEditClick(ev: Event, item: Schedule) {
     if (!this.schedules) return;
+
+    // a plan is several timelines at once; the single-timeline editor would
+    // flatten it, so it gets its own editor
+    if (isPlan(item)) {
+      this._openPlanDialog(ev.target as HTMLElement, item);
+      return;
+    }
 
     const params: SchedulerDialogParams = {
       schedule: parseTimeBar(item, this.hass),

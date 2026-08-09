@@ -283,6 +283,58 @@
             "heading": "Quick add row"
           }
         }
+      },
+      "plan": {
+        "title": "Shabbat plan",
+        "open": "Shabbat plan",
+        "anchor": {
+          "opens": "Candle lighting",
+          "closes": "Havdalah",
+          "fixed": "Fixed time"
+        },
+        "boundary": {
+          "from": "From",
+          "to": "Until",
+          "at_clock": "at",
+          "offset": "offset by",
+          "before": "before",
+          "after": "after"
+        },
+        "cube": {
+          "welcome": "Kabbalat Shabbat",
+          "night": "Night",
+          "morning": "Morning",
+          "afternoon": "Afternoon",
+          "close": "Motzei Shabbat",
+          "unnamed": "Unnamed",
+          "split": "Split"
+        },
+        "group": {
+          "default": "Shabbat group",
+          "new": "Group {n}",
+          "add": "Add a group",
+          "remove": "Remove this group",
+          "members": "{n} devices",
+          "devices": "Devices in this group"
+        },
+        "detach": {
+          "name": "Exception",
+          "action": "detach",
+          "row": "detached from its group",
+          "rejoin": "Back to the group",
+          "note": "{device} keeps its own hours here. The group leaves it alone until this ends, then takes it back.",
+          "once": "One-off, on"
+        },
+        "state": {
+          "label": "State",
+          "on": "On",
+          "off": "Off"
+        },
+        "error": {
+          "no_entities": "\"{group}\" has no devices yet.",
+          "no_anchor": "The plan needs its times from an entity.",
+          "no_anchor_hint": "Enable the Jewish Calendar integration so that {start} and {end} publish a time. Halachic times are not a fixed offset from sunset, so they have to be read at trigger time rather than guessed."
+        }
       }
     }
   }

@@ -17,7 +17,7 @@ from homeassistant.const import (
 
 # Single version for the merged repository: the integration and the card it
 # serves are released together, so the card's version stream is continued here.
-VERSION = "4.0.19"
+VERSION = "4.1.0"
 
 DOMAIN = "scheduler"
 

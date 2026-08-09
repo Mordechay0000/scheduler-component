@@ -95,7 +95,8 @@ export default async function run() {
     s.ok(await has(p, 'scheduler-item-row'), 'the list view renders list rows');
     s.ok(!await has(p, '.clock'), 'show_clock: false hides the clock');
     s.ok(!await has(p, 'scheduler-overview-add-row'), 'show_quick_add: false hides the quick-add row');
-    s.ok(!await has(p, 'ha-icon-button'), 'show_view_toggle: false hides the view switcher');
+    s.ok(!await has(p, 'ha-icon-button.view-toggle'), 'show_view_toggle: false hides the view switcher');
+    s.ok(await has(p, 'ha-icon-button.plan-button'), 'the Shabbat plan is still reachable');
   });
 
   // With nothing scheduled yet, the first schedule still has to be creatable.

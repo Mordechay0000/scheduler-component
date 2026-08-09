@@ -1,6 +1,6 @@
 {
   "name": "scheduler",
-  "version": "4.0.19",
+  "version": "4.1.0",
   "description": "Scheduler card for Lovelace, bundled with the scheduler integration",
   "main": "custom_components/scheduler/frontend/scheduler-card.js",
   "scripts": {

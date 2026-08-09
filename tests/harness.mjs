@@ -98,7 +98,7 @@ export class Suite {
  * Serves the test page next to the built bundle and hands the caller a
  * ready page. Everything is torn down afterwards, including on failure.
  */
-export async function withPage(html, fn) {
+export async function withPage(html, fn, { timezoneId } = {}) {
   if (!fs.existsSync(BUNDLE)) {
     throw new Error(`missing ${BUNDLE} - run "npm run rollup" first`);
   }
@@ -121,7 +121,10 @@ export async function withPage(html, fn) {
   // instead of downloading one.
   const browser = await chromium.launch(
     process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
-  const page = await browser.newPage();
+  // A plan is drawn against real dates, so where the machine thinks it is
+  // decides which day a boundary lands on. Pinning it keeps that reproducible.
+  const context = await browser.newContext(timezoneId ? { timezoneId } : {});
+  const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(e.message));
 
