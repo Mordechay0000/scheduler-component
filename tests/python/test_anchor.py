@@ -122,8 +122,10 @@ def test_resolve_sun_anchor(hass, states):
     timer = make_timer(hass)
     now = dt_util.now()
 
-    assert timer.resolve_anchor("sunset", now).hour == 19  # 16:32 UTC = 19:32 IDT
-    assert timer.resolve_anchor("sunrise", now).hour == 6
+    sunset = timer.resolve_anchor("sunset", now)
+    assert sunset.timestamp.hour == 19  # 16:32 UTC = 19:32 IDT
+    assert sunset.dated is False  # a sun event only fixes a time of day
+    assert timer.resolve_anchor("sunrise", now).timestamp.hour == 6
 
 
 def test_resolve_entity_anchor_from_timestamp(hass, states):
@@ -133,7 +135,9 @@ def test_resolve_entity_anchor_from_timestamp(hass, states):
 
     resolved = timer.resolve_anchor("sensor.jewish_calendar_shkia", dt_util.now())
 
-    assert (resolved.hour, resolved.minute) == (19, 26)
+    assert (resolved.timestamp.hour, resolved.timestamp.minute) == (19, 26)
+    assert resolved.timestamp.date() == datetime.date(2026, 8, 14)
+    assert resolved.dated is True  # the anchor names the day too
 
 
 def test_resolve_entity_anchor_from_plain_time(hass, states):
@@ -144,8 +148,13 @@ def test_resolve_entity_anchor_from_plain_time(hass, states):
 
     resolved = timer.resolve_anchor("sensor.shkia", now)
 
-    assert (resolved.hour, resolved.minute, resolved.second) == (19, 26, 0)
-    assert resolved.date() == now.date()
+    assert (
+        resolved.timestamp.hour,
+        resolved.timestamp.minute,
+        resolved.timestamp.second,
+    ) == (19, 26, 0)
+    assert resolved.timestamp.date() == now.date()
+    assert resolved.dated is False  # no day information in a bare time
 
 
 @pytest.mark.parametrize("state", ["unavailable", "unknown", "", "not a time", "1"])
@@ -211,6 +220,89 @@ def test_fixed_times_are_unaffected(hass, states):
     ts = timer.calculate_timestamp("22:30:00", now)
 
     assert (ts.hour, ts.minute) == (22, 30)
+
+
+# --- anchors that name a day ----------------------------------------------
+#
+# A weekday rule cannot express Yom Tov, which is why this matters: the Jewish
+# Calendar sensors publish the moment of the upcoming candle lighting/havdalah
+# including festivals, so a schedule that keeps the date lands on the right day
+# without any calendar condition attached to it.
+
+
+def test_dated_anchor_keeps_its_day(hass, states):
+    """A timestamp anchor fires on the day it names, not every day."""
+    # a Thursday - Shavuot eve, not a Friday
+    states.set(
+        "sensor.jewish_calendar_upcoming_candle_lighting",
+        "2026-05-21T16:29:00+00:00",
+    )
+    timer = make_timer(hass, weekdays=["friday"])
+    now = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    ts = timer.calculate_timestamp(
+        "sensor.jewish_calendar_upcoming_candle_lighting+00:00:00", now
+    )
+
+    assert ts.date() == datetime.date(2026, 5, 21)
+    assert ts.weekday() == 3  # Thursday: no weekday rule could have produced this
+    assert (ts.hour, ts.minute) == (19, 29)
+
+
+def test_dated_anchor_offset_crosses_midnight(hass, states):
+    """The Shabbat band runs into the small hours - the offset must not clamp.
+
+    A time-of-day anchor clamps to 23:59 here, because it has no day to carry
+    the overflow into. A dated anchor does.
+    """
+    states.set("sensor.jewish_calendar_upcoming_havdalah", "2026-08-15T17:12:00+00:00")
+    timer = make_timer(hass)
+    now = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    ts = timer.calculate_timestamp(
+        "sensor.jewish_calendar_upcoming_havdalah+04:00:00", now
+    )
+
+    assert ts.date() == datetime.date(2026, 8, 16)  # rolled into the next day
+    assert (ts.hour, ts.minute) == (0, 12)
+
+
+def test_time_of_day_anchor_still_clamps(hass, states):
+    """Unchanged for the existing forms, which have no day to roll into."""
+    states.set("sensor.shkia", "20:12")
+    timer = make_timer(hass)
+    now = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    ts = timer.calculate_timestamp("sensor.shkia+04:00:00", now)
+
+    assert (ts.hour, ts.minute) == (23, 59)
+
+
+def test_dated_anchor_respects_date_restrictions(hass, states):
+    states.set("sensor.havdalah", "2026-08-15T17:12:00+00:00")
+    timer = make_timer(hass)
+    timer._start_date = "2026-09-01"
+    now = dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    assert timer.calculate_timestamp("sensor.havdalah+00:00:00", now) is None
+
+
+def test_dated_anchor_in_the_past_is_kept(hass, states):
+    """During Shabbat the opening anchor points backwards, and it must.
+
+    current_timeslot() decides whether a slot is overlapping now by comparing
+    against its start - a start silently rolled forward a week would make the
+    engine believe Shabbat had not begun.
+    """
+    states.set("sensor.candle_lighting", "2020-01-03T16:00:00+00:00")
+    timer = make_timer(hass)
+    now = dt_util.now()
+
+    ts = timer.calculate_timestamp("sensor.candle_lighting+00:00:00", now)
+
+    assert ts is not None
+    assert ts < now
+    assert ts.date() == datetime.date(2020, 1, 3)
 
 
 # --- which entities the timer must watch ----------------------------------

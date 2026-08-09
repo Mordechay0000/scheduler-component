@@ -1,5 +1,6 @@
 import logging
 import datetime
+from collections import namedtuple
 
 
 import homeassistant.util.dt as dt_util
@@ -32,6 +33,10 @@ _LOGGER = logging.getLogger(__name__)
 ATTR_NEXT_RISING = "next_rising"
 ATTR_NEXT_SETTING = "next_setting"
 ATTR_WORKDAYS = "workdays"
+
+# `dated` marks an anchor that resolved to a specific day, not just a time of
+# day - the difference between "every day at 19:08" and "this Friday at 19:08".
+AnchorTime = namedtuple("AnchorTime", ["timestamp", "dated"])
 
 
 def has_sun(time_str: str):
@@ -384,16 +389,24 @@ class TimerHandler:
         else:
             # relative to an anchor (sunrise/sunset, or an entity publishing a time)
             (anchor, sign, offset_str) = parsed
-            ts = self.resolve_anchor(anchor, now)
-            if not ts:
+            resolved = self.resolve_anchor(anchor, now)
+            if not resolved:
                 return None
-            ts = ts.replace(second=0)
-            time_anchor = datetime.timedelta(
-                hours=ts.hour, minutes=ts.minute, seconds=ts.second
-            )
+            ts = resolved.timestamp.replace(second=0, microsecond=0)
             offset = dt_util.parse_time(offset_str)
             offset = datetime.timedelta(
                 hours=offset.hour, minutes=offset.minute, seconds=offset.second
+            )
+
+            if resolved.dated:
+                # the anchor names the day as well as the time, so the offset
+                # may cross midnight - which is the whole point for a band that
+                # runs from Friday evening into Saturday night.
+                ts = ts - offset if sign == "-" else ts + offset
+                return self.apply_date_restrictions(ts)
+
+            time_anchor = datetime.timedelta(
+                hours=ts.hour, minutes=ts.minute, seconds=ts.second
             )
             if sign == "-":
                 if (time_anchor - offset).total_seconds() >= 0:
@@ -450,14 +463,21 @@ class TimerHandler:
             time_str, next_day, iteration + 1, reverse_direction
         )
 
-    def resolve_anchor(
-        self, anchor: str, now: datetime.datetime
-    ) -> datetime.datetime:
-        """resolve an anchor to a local datetime, or None if it is unavailable.
+    def apply_date_restrictions(self, ts: datetime.datetime):
+        """drop a timestamp that falls outside the schedule's date range"""
+        if self._start_date and days_until_date(self._start_date, ts) > 0:
+            return None
+        if self._end_date and days_until_date(self._end_date, ts) < 0:
+            return None
+        return ts
 
-        Only the time-of-day of the result is used by the caller, which is why
-        an entity that publishes a plain "HH:MM" is as good as one publishing a
-        full timestamp.
+    def resolve_anchor(self, anchor: str, now: datetime.datetime) -> AnchorTime:
+        """resolve an anchor to a moment, or None if it is unavailable.
+
+        `dated` says whether the anchor decided the day too. A sun event or a
+        bare "HH:MM" only gives a time of day, and the caller has to find the
+        next occurrence of it. A timestamp names an exact moment - which is how
+        an anchor can land on Yom Tov, a day no weekday rule can express.
         """
         if anchor in [const.SUN_EVENT_SUNRISE, const.SUN_EVENT_SUNSET]:
             sun = self.hass.states.get(const.SUN_ENTITY)
@@ -471,7 +491,7 @@ class TimerHandler:
             if attribute not in sun.attributes:
                 return None
             ts = dt_util.parse_datetime(sun.attributes[attribute])
-            return dt_util.as_local(ts) if ts else None
+            return AnchorTime(dt_util.as_local(ts), False) if ts else None
 
         state = self.hass.states.get(anchor)
         if not state or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
@@ -485,16 +505,19 @@ class TimerHandler:
         # timestamp sensors (device_class: timestamp) publish an ISO datetime
         ts = dt_util.parse_datetime(state.state)
         if ts is not None:
-            return dt_util.as_local(ts)
+            return AnchorTime(dt_util.as_local(ts), True)
 
         # template sensors commonly publish a bare time instead
         time = dt_util.parse_time(state.state)
         if time is not None:
-            return now.replace(
-                hour=time.hour,
-                minute=time.minute,
-                second=time.second,
-                microsecond=0,
+            return AnchorTime(
+                now.replace(
+                    hour=time.hour,
+                    minute=time.minute,
+                    second=time.second,
+                    microsecond=0,
+                ),
+                False,
             )
 
         _LOGGER.warning(
