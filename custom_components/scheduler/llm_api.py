@@ -116,9 +116,12 @@ A WORKED PLAN
     "name": "home",
     "devices": ["light.salon", "switch.boiler"],
     "cubes": [
-      {"name": "coming in", "from": "candle_lighting",       "to": "candle_lighting@22:30", "state": "on"},
-      {"name": "night",     "from": "candle_lighting@22:30", "to": "havdalah@06:30",        "state": "off"},
-      {"name": "morning",   "from": "havdalah@06:30",        "to": "havdalah+1h",           "state": "on"}
+      {"name": "coming in", "from": "candle_lighting", "to": "candle_lighting@22:30",
+       "devices": [{"device": "light.salon", "state": "on"},
+                   {"device": "switch.boiler", "state": "on"}]},
+      {"name": "night", "from": "candle_lighting@22:30", "to": "havdalah@06:30",
+       "devices": [{"device": "light.salon", "state": "off"},
+                   {"device": "switch.boiler", "state": "off"}]}
     ]
   }],
   "exceptions": [
@@ -131,30 +134,36 @@ A device named in an exception must also be in a group - an exception is a
 device leaving its group for a while, so there has to be a group to leave. Add
 "only_on": "2026-08-15" to make an exception happen once instead of weekly.
 
-ONE STRETCH, SEVERAL DIFFERENT DEVICE STATES  (read this - it is the point)
-A stretch is not one state for everything. It has a state of its own, and then
-any number of devices doing something else, each with its own settings. This is
-what makes the common case work: a house on a small generator cannot run the
-salon air conditioner and the bedroom ones at the same time, so during the meal
-the salon is on and the bedrooms are off, and later it is the other way round.
+A STRETCH IS A LIST OF DEVICES  (read this - it is the point)
+A stretch has no state of its own. It names devices, and each one carries its
+own state and its own settings. This is what makes the common case work: a house
+on a small generator cannot run the salon air conditioner and the bedroom ones at
+the same time, so during the meal the salon is on and the bedrooms are off, and
+later it is the other way round.
 
   {"name": "the meal", "from": "candle_lighting@20:00", "to": "candle_lighting@22:30",
-   "state": "off",
-   "overrides": [
-     {"device": "climate.salon",   "state": "on", "degrees": 16},
-     {"device": "light.salon",     "state": "on", "brightness": 50},
-     {"device": "light.corridor",  "state": "on", "brightness": 10}
+   "devices": [
+     {"device": "climate.salon",   "state": "on",  "degrees": 16},
+     {"device": "climate.bedroom", "state": "off"},
+     {"device": "light.salon",     "state": "on",  "brightness": 50},
+     {"device": "light.corridor",  "state": "on",  "brightness": 10}
    ]}
 
   {"name": "night", "from": "candle_lighting@22:30", "to": "havdalah@06:30",
-   "state": "off",
-   "overrides": [
-     {"device": "climate.bedroom", "state": "on", "degrees": 24}
+   "devices": [
+     {"device": "climate.salon",   "state": "off"},
+     {"device": "climate.bedroom", "state": "on", "degrees": 24},
+     {"device": "light.salon",     "state": "off"}
    ]}
 
-So: "state" is what most of the group does, and "overrides" is everybody who
-differs. Never copy a plan, and never make a second group, just because devices
-disagree inside one stretch.
+LEAVING A DEVICE OUT MEANS SOMETHING
+A device missing from a stretch's "devices" is not switched, not held to
+anything, and not retried if a call fails: the stretch does not touch it, it
+keeps whatever it had, and any other schedule is free to drive it. Do that
+deliberately - say so when you do - and never by forgetting.
+
+Never copy a plan, and never make a second group, just because devices disagree
+inside one stretch.
 
 Use an exception instead only when a device needs its own *hours* - different
 start and stop times from the group.
@@ -162,10 +171,10 @@ start and stop times from the group.
 SETTINGS
 "brightness" 1-100 percent and "kelvin" colour temperature (2200 warm, 4000
 neutral, 6500 daylight) apply to lights. "degrees" is the target temperature of
-an air conditioner or heater, 5-35 celsius. Each can be set on the stretch or on
-a single override, and a setting a device cannot take is simply left off - so
-one stretch safely carries a brightness for its lights and degrees for its air
-conditioner at the same time. All of them are ignored when the state is "off".
+an air conditioner or heater, 5-35 celsius. They go on the device that takes
+them; a setting a device cannot take is simply left off, so one stretch safely
+carries a brightness for its lights and degrees for its air conditioner at once.
+All are ignored when that device's state is "off".
 
 HOLDING A STATE (experimental)
 "enforce": true on a stretch puts a device back if a wall switch or another
@@ -189,12 +198,12 @@ BRIGHTNESS = vol.All(vol.Coerce(int), vol.Range(min=1, max=100))
 KELVIN = vol.All(vol.Coerce(int), vol.Range(min=1500, max=8000))
 DEGREES = vol.All(vol.Coerce(float), vol.Range(min=5, max=35))
 
-OVERRIDE_SCHEMA = vol.Schema(
+DEVICE_STATE_SCHEMA = vol.Schema(
     {
         vol.Required(
             "device",
-            description="entity id of a device in this group that does something "
-            "different in this stretch",
+            description="entity id, or a name from the device book, that this stretch "
+            "acts on",
         ): cv.string,
         vol.Optional("state", description="'on' or 'off'", default="on"): vol.In(["on", "off"]),
         vol.Optional("brightness", description="1-100 percent, lights only"): BRIGHTNESS,
@@ -212,27 +221,17 @@ CUBE_SCHEMA = vol.Schema(
         vol.Optional("name", description="what this stretch is called"): cv.string,
         vol.Required("from", description=f"when it starts: {TIME_DESCRIPTION}"): cv.string,
         vol.Required("to", description=f"when it ends: {TIME_DESCRIPTION}"): cv.string,
-        vol.Optional(
-            "state", description="'on' or 'off' for the whole stretch", default="on"
-        ): vol.In(["on", "off"]),
-        vol.Optional("brightness", description="1-100 percent, lights only"): BRIGHTNESS,
-        vol.Optional(
-            "kelvin", description="colour temperature: 2200 warm, 4000 neutral, 6500 daylight"
-        ): KELVIN,
-        vol.Optional(
-            "degrees", description="target temperature in celsius, 5-35, air conditioners and heaters only"
-        ): DEGREES,
-        vol.Optional(
-            "overrides",
-            description="devices of this group that do something OTHER than the "
-            "stretch's own state - each with its own state and its own settings. "
-            "This is how one stretch has the salon air conditioner on at 16 degrees "
-            "while the bedroom ones are off, and one light at 50 percent while "
-            "another is at 10.",
-        ): [OVERRIDE_SCHEMA],
+        vol.Required(
+            "devices",
+            description="the devices this stretch acts on, EACH WITH ITS OWN STATE and "
+            "its own settings. A stretch has no single state of its own: this is how the "
+            "salon air conditioner runs at 16 degrees while the bedroom ones are off, "
+            "and one light sits at 50 percent while another is at 10. Leave a device out "
+            "of this list entirely and the stretch does not touch it at all.",
+        ): [DEVICE_STATE_SCHEMA],
         vol.Optional(
             "enforce",
-            description="put the devices back if a wall switch or another integration "
+            description="put these devices back if a wall switch or another integration "
             "moves them while this stretch is running (experimental)",
         ): cv.boolean,
         vol.Optional("color", description="hex colour for the editor, e.g. #43a047"): cv.string,
@@ -243,7 +242,9 @@ GROUP_SCHEMA = vol.Schema(
     {
         vol.Required("name", description="what this group of devices is called"): cv.string,
         vol.Required(
-            "devices", description="entity ids that move together, e.g. ['light.salon']"
+            "devices",
+            description="every entity id, or device-book name, that belongs to this "
+            "group. A stretch can only act on devices listed here.",
         ): [cv.string],
         vol.Required(
             "cubes", description="the stretches of the band, in order"

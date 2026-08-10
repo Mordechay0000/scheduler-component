@@ -64,30 +64,32 @@ class DeviceState:
 
 @dataclass
 class Cube:
-    """One stretch of the band: a name, two boundaries, and what devices do.
+    """One stretch of the band: a name, two boundaries, and a list of devices.
 
-    `state` is what the group does. `overrides` is how one device differs
-    without the whole timeline having to be duplicated for it - the group's
-    lights on while its hotplate stays off, in the very same stretch.
+    A stretch has no state of its own. It *is* the devices it names, each with
+    its own state and settings - the salon air conditioner at 16 while the
+    bedroom ones are off, one light at 50 percent and another at 10.
+
+    A device the stretch does not name is not touched by it at all: not
+    switched, not held to anything, not chased if a call fails. It keeps
+    whatever it had, and any other schedule is free to drive it.
     """
 
     name: str
     start: str
     stop: str
-    state: str = ON
     color: str | None = None
-    brightness: int | None = None
-    kelvin: int | None = None
-    degrees: float | None = None
-    #: entity id -> what that one device does here, instead of the group's state
-    overrides: dict[str, DeviceState] = field(default_factory=dict)
-    #: put the devices back if something else moves them during this stretch
+    #: entity id -> what that device does here. Absent means "leave it alone".
+    devices: dict[str, DeviceState] = field(default_factory=dict)
+    #: put these devices back if something else moves them during this stretch
     enforce: bool = False
 
-    def for_device(self, device: str) -> DeviceState:
-        return self.overrides.get(
-            device, DeviceState(self.state, self.brightness, self.kelvin, self.degrees)
-        )
+    def for_device(self, device: str) -> DeviceState | None:
+        """What this stretch asks of a device, or None if it asks nothing."""
+        return self.devices.get(device)
+
+    def touches(self, device: str) -> bool:
+        return device in self.devices
 
 
 @dataclass
@@ -201,45 +203,22 @@ def _key(wanted: DeviceState):
 
 
 def _cube_from_slot(slot: dict[str, Any], anchors: dict[str, str]) -> Cube:
-    """Read a stretch back, telling the group's state from a device's own.
+    """Read a stretch back.
 
-    The slot carries one action per device. Whatever most of them are doing is
-    the stretch's state; a device doing something else is an override, which is
-    how one device differs inside a stretch without the timeline being copied.
+    Nothing has to be guessed any more: the slot carries one action per device,
+    and that is exactly the list of devices the stretch names. A device the slot
+    says nothing about is one the stretch does not touch.
     """
-    per_device = {
-        action["entity_id"]: _device_state_of(action)
-        for action in slot.get("actions", [])
-        if action.get("entity_id")
-    }
-
-    common = DeviceState(_state_of(slot["actions"][0].get("service", "")))
-    if per_device:
-        settings = list(per_device.values())
-        if all(_key(w) == _key(settings[0]) for w in settings):
-            # everything agrees, so it is simply the stretch's own state
-            common = settings[0]
-        else:
-            # They differ - which is the whole point of a stretch: the salon air
-            # conditioner on at 16 while the bedrooms are off. There is no
-            # sensible shared setting then, so the stretch keeps only the plainer
-            # of on and off and every device carries its own.
-            on_count = sum(1 for w in settings if w.state == ON)
-            common = DeviceState(ON if on_count * 2 > len(settings) else OFF)
-
     return Cube(
         name=slot.get("name") or "",
         start=from_engine(slot.get("start", ""), anchors),
         stop=from_engine(slot.get("stop") or slot.get("start", ""), anchors),
-        state=common.state,
-        brightness=common.brightness,
-        kelvin=common.kelvin,
         color=slot.get("color"),
         enforce=bool(slot.get("enforce")),
-        overrides={
-            device: wanted
-            for device, wanted in per_device.items()
-            if _key(wanted) != _key(common)
+        devices={
+            action["entity_id"]: _device_state_of(action)
+            for action in slot.get("actions", [])
+            if action.get("entity_id")
         },
     )
 
@@ -318,11 +297,12 @@ def plan_to_timeslots(plan: Plan) -> list[dict[str, Any]]:
                     "track": track,
                     "priority": 0,
                     "enforce": cube.enforce,
-                    # one action per device, so a device can differ inside the
-                    # stretch without the stretch being copied for it
+                    # one action per device the stretch names, and none at all
+                    # for the ones it deliberately leaves alone
                     "actions": [
-                        _action_for(device, cube.for_device(device))
+                        _action_for(device, cube.devices[device])
                         for device in group.devices
+                        if cube.touches(device)
                     ],
                     **_empty_conditions(),
                 }
@@ -413,24 +393,24 @@ def validate(plan: Plan) -> None:
             where = f"group '{group.name}', stretch '{cube.name}'"
             _check_boundary(cube.start, where, "from")
             _check_boundary(cube.stop, where, "to")
-            _check_parameters(cube, where)
-            if cube.state not in (ON, OFF):
+            if not cube.devices:
                 raise PlanError(
-                    f"Stretch '{cube.name}' has state '{cube.state}'. Use '{ON}' or '{OFF}'."
+                    f"{where} names no devices, so it would do nothing. List the ones "
+                    "it acts on, each with its own state: 'devices': "
+                    "[{'device': 'light.salon', 'state': 'on'}]."
                 )
-            for device, wanted in cube.overrides.items():
+            for device, wanted in cube.devices.items():
                 if device not in group.devices:
                     raise PlanError(
-                        f"{where}: there is an override for '{device}', but it is not in "
-                        f"'{group.name}'. An override is one of the group's own devices "
-                        "doing something different in this stretch."
+                        f"{where}: it acts on '{device}', which is not in "
+                        f"'{group.name}'. Add it to the group's devices first."
                     )
                 if wanted.state not in (ON, OFF):
                     raise PlanError(
-                        f"{where}: the override for '{device}' has state "
-                        f"'{wanted.state}'. Use '{ON}' or '{OFF}'."
+                        f"{where}: '{device}' has state '{wanted.state}'. "
+                        f"Use '{ON}' or '{OFF}'."
                     )
-                _check_parameters(wanted, f"{where}, override for '{device}'")
+                _check_parameters(wanted, f"{where}, '{device}'")
         _check_overlaps(group)
 
     _check_no_device_in_two_groups(plan)
@@ -598,6 +578,17 @@ def describe_plan(plan: Plan) -> dict[str, Any]:
             devices = []
             for device in group.devices:
                 wanted = cube.for_device(device)
+                if wanted is None:
+                    devices.append(
+                        {
+                            "device": device,
+                            "state": "untouched",
+                            "means": "this stretch does not act on it: it keeps whatever "
+                                     "it had, is not held to anything, is not retried, "
+                                     "and any other schedule may drive it",
+                        }
+                    )
+                    continue
                 if not takes_light_parameters(device):
                     wanted = DeviceState(
                         wanted.state, degrees=wanted.degrees if takes_degrees(device) else None
@@ -611,7 +602,6 @@ def describe_plan(plan: Plan) -> dict[str, Any]:
                     {
                         "device": device,
                         **wanted.as_dict(),
-                        "why": "override" if device in cube.overrides else "group",
                         **(
                             {"but": f"'{taken_over[0].name}' takes it over for part of this"}
                             if taken_over
@@ -666,12 +656,46 @@ def describe_plan(plan: Plan) -> dict[str, Any]:
 # --- the shape the tools speak ----------------------------------------------
 
 
+def _state_from_entry(entry: dict[str, Any]) -> DeviceState:
+    return DeviceState(
+        state=entry.get("state", ON),
+        brightness=entry.get("brightness"),
+        kelvin=entry.get("kelvin"),
+        degrees=entry.get("degrees"),
+    )
+
+
+def _cube_devices(cube: dict[str, Any], group_devices: list[str]) -> dict[str, DeviceState]:
+    """The devices a stretch acts on.
+
+    The written form is a list, one entry per device. The older form - a state
+    for the whole stretch plus a list of overrides - is still accepted and
+    expanded here, so anything written before this is read exactly as it was.
+    """
+    if cube.get("devices") is not None:
+        return {
+            entry["device"]: _state_from_entry(entry)
+            for entry in cube["devices"]
+            if _require_device(entry)
+        }
+
+    if "state" in cube or "overrides" in cube:
+        shared = _state_from_entry(cube)
+        out = {device: shared for device in group_devices}
+        for override in cube.get("overrides") or []:
+            _require_device(override)
+            out[override["device"]] = _state_from_entry(override)
+        return out
+
+    # nothing said at all: the whole group, on - what a stretch used to mean
+    return {device: DeviceState(ON) for device in group_devices}
+
+
 def _require_device(override: dict[str, Any]) -> bool:
     if not override.get("device"):
         raise PlanError(
-            "An override needs 'device' - the entity that differs from the rest of its "
-            "group in this stretch, e.g. "
-            "{'device': 'switch.plata', 'state': 'off'}."
+            "Every entry in a stretch's 'devices' needs a 'device' - the entity it "
+            "acts on, e.g. {'device': 'switch.plata', 'state': 'off'}."
         )
     return True
 
@@ -697,22 +721,9 @@ def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) 
                     name=cube.get("name") or "",
                     start=cube["from"],
                     stop=cube["to"],
-                    state=cube.get("state", ON),
-                    brightness=cube.get("brightness"),
-                    kelvin=cube.get("kelvin"),
-                    degrees=cube.get("degrees"),
                     color=cube.get("color"),
                     enforce=bool(cube.get("enforce")),
-                    overrides={
-                        override["device"]: DeviceState(
-                            state=override.get("state", ON),
-                            brightness=override.get("brightness"),
-                            kelvin=override.get("kelvin"),
-                            degrees=override.get("degrees"),
-                        )
-                        for override in (cube.get("overrides") or [])
-                        if _require_device(override)
-                    },
+                    devices=_cube_devices(cube, list(raw.get("devices") or [])),
                 )
             )
         groups.append(
@@ -758,22 +769,12 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                         "name": cube.name,
                         "from": cube.start,
                         "to": cube.stop,
-                        "state": cube.state,
-                        **({"brightness": cube.brightness} if cube.brightness is not None else {}),
-                        **({"kelvin": cube.kelvin} if cube.kelvin is not None else {}),
-                        **({"degrees": cube.degrees} if cube.degrees is not None else {}),
+                        "devices": [
+                            {"device": device, **wanted.as_dict()}
+                            for device, wanted in cube.devices.items()
+                        ],
                         **({"color": cube.color} if cube.color else {}),
                         **({"enforce": True} if cube.enforce else {}),
-                        **(
-                            {
-                                "overrides": [
-                                    {"device": device, **wanted.as_dict()}
-                                    for device, wanted in cube.overrides.items()
-                                ]
-                            }
-                            if cube.overrides
-                            else {}
-                        ),
                     }
                     for cube in group.cubes
                 ],

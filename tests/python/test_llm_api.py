@@ -40,9 +40,15 @@ WORKED = {
             "name": "home",
             "devices": ["light.salon", "switch.plata"],
             "cubes": [
-                {"name": "coming in", "from": "candle_lighting", "to": "candle_lighting@22:30", "state": "on"},
-                {"name": "night", "from": "candle_lighting@22:30", "to": "havdalah@06:30", "state": "off"},
-                {"name": "morning", "from": "havdalah@06:30", "to": "havdalah+1h", "state": "on"},
+                {"name": "coming in", "from": "candle_lighting", "to": "candle_lighting@22:30",
+                 "devices": [{"device": "light.salon", "state": "on"},
+                             {"device": "switch.plata", "state": "on"}]},
+                {"name": "night", "from": "candle_lighting@22:30", "to": "havdalah@06:30",
+                 "devices": [{"device": "light.salon", "state": "off"},
+                             {"device": "switch.plata", "state": "off"}]},
+                {"name": "morning", "from": "havdalah@06:30", "to": "havdalah+1h",
+                 "devices": [{"device": "light.salon", "state": "on"},
+                             {"device": "switch.plata", "state": "on"}]},
             ],
         }
     ],
@@ -157,14 +163,15 @@ def test_the_plan_argument_is_a_real_schema():
     # ... and a well-formed one passes, defaults filled in
     result = schema(
         {"plan": {"groups": [{"name": "g", "devices": ["light.a"], "cubes": [
-            {"from": "candle_lighting", "to": "havdalah"}]}]}}
+            {"from": "candle_lighting", "to": "havdalah",
+             "devices": [{"device": "light.a"}]}]}]}}
     )
-    assert result["plan"]["groups"][0]["cubes"][0]["state"] == "on"
+    assert result["plan"]["groups"][0]["cubes"][0]["devices"][0]["state"] == "on"
 
 
 def test_the_prompt_says_when_to_override_and_when_to_detach():
     """The two are easy to confuse, and picking wrong duplicates a timeline."""
-    assert "overrides" in API_PROMPT
+    assert "LEAVING A DEVICE OUT MEANS SOMETHING" in API_PROMPT
     assert "its own *hours*" in API_PROMPT
     assert "enforce" in API_PROMPT
 
@@ -173,14 +180,16 @@ def test_the_schema_offers_overrides_and_light_parameters():
     schema = SavePlanTool.parameters
     result = schema({
         "plan": {"groups": [{"name": "g", "devices": ["light.a", "switch.b"], "cubes": [{
-            "from": "candle_lighting", "to": "havdalah", "state": "on",
-            "brightness": 40, "kelvin": 2200, "enforce": True,
-            "overrides": [{"device": "switch.b", "state": "off"}],
+            "from": "candle_lighting", "to": "havdalah", "enforce": True,
+            "devices": [
+                {"device": "light.a", "state": "on", "brightness": 40, "kelvin": 2200},
+                {"device": "switch.b", "state": "off"},
+            ],
         }]}]}
     })
     cube = result["plan"]["groups"][0]["cubes"][0]
-    assert cube["brightness"] == 40
-    assert cube["overrides"][0]["device"] == "switch.b"
+    assert cube["devices"][0]["brightness"] == 40
+    assert cube["devices"][1]["state"] == "off"
     assert cube["enforce"] is True
 
 
@@ -189,7 +198,8 @@ def test_the_schema_keeps_a_parameter_in_range(field, value):
     with pytest.raises(vol.Invalid):
         SavePlanTool.parameters({
             "plan": {"groups": [{"name": "g", "devices": ["light.a"], "cubes": [
-                {"from": "candle_lighting", "to": "havdalah", field: value}]}]}
+                {"from": "candle_lighting", "to": "havdalah",
+                 "devices": [{"device": "light.a", field: value}]}]}]}
         })
 
 
@@ -292,7 +302,8 @@ def test_a_plan_that_would_fire_every_day_saves_but_says_so(hass, coordinator):
     plan = {
         "name": "x",
         "groups": [{"name": "home", "devices": ["light.salon"], "cubes": [
-            {"name": "night", "from": "candle_lighting", "to": "22:30", "state": "off"}]}],
+            {"name": "night", "from": "candle_lighting", "to": "22:30",
+             "devices": [{"device": "light.salon", "state": "off"}]}]}],
     }
     result = call(SavePlanTool, hass, plan=plan)
 
@@ -308,8 +319,10 @@ def test_a_device_can_differ_inside_a_stretch_without_a_second_timeline(hass, co
             "devices": ["light.salon", "switch.plata"],
             "cubes": [{
                 "name": "morning", "from": "havdalah@06:30", "to": "havdalah@13:00",
-                "state": "on", "brightness": 60,
-                "overrides": [{"device": "switch.plata", "state": "off"}],
+                "devices": [
+                    {"device": "light.salon", "state": "on", "brightness": 60},
+                    {"device": "switch.plata", "state": "off"},
+                ],
             }],
         }],
     }
@@ -344,7 +357,8 @@ def test_holding_a_state_reaches_the_stored_slot(hass, coordinator):
     result = call(SavePlanTool, hass, plan={
         "name": "x",
         "groups": [{"name": "home", "devices": ["light.salon"], "cubes": [
-            {"name": "n", "from": "candle_lighting", "to": "havdalah", "enforce": True}]}],
+            {"name": "n", "from": "candle_lighting", "to": "havdalah", "enforce": True,
+             "devices": [{"device": "light.salon", "state": "on"}]}]}],
     })
 
     assert result["ok"]

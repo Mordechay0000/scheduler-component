@@ -29,6 +29,14 @@ from scheduler.plan_times import (
     to_engine,
 )
 
+def on(device, **extra):
+    return {"device": device, "state": "on", **extra}
+
+
+def off(device):
+    return {"device": device, "state": "off"}
+
+
 CANDLE = DEFAULT_ANCHORS["candle_lighting"]
 HAVDALAH = DEFAULT_ANCHORS["havdalah"]
 
@@ -249,17 +257,17 @@ def test_a_device_can_differ_without_a_row_of_its_own():
     assert len({s["track"] for s in plan_to_payload(plan_with_override())["timeslots"]}) == 1
 
 
-def test_an_override_reads_back_as_an_override():
+def test_a_stretch_reads_back_as_the_devices_it_names():
     payload = plan_to_payload(plan_with_override())
     stored = {"name": payload["name"], "timeslots": payload["timeslots"]}
     cube = plan_to_dict(plan_from_schedule(stored))["groups"][0]["cubes"][0]
 
-    assert cube["state"] == "on"
-    assert cube["overrides"] == [{"device": "switch.plata", "state": "off"}]
+    by_device = {d["device"]: d["state"] for d in cube["devices"]}
+    assert by_device == {"light.salon": "on", "light.hallway": "on", "switch.plata": "off"}
 
 
-def test_the_majority_decides_which_way_round_it_is():
-    """Two off and one on reads as an off stretch with one device on."""
+def test_nothing_has_to_be_guessed_when_reading_a_stretch_back():
+    """Each device carries its own state, so there is no majority to infer."""
     plan = plan_from_dict(
         {
             "name": "x",
@@ -267,8 +275,8 @@ def test_the_majority_decides_which_way_round_it_is():
                 "name": "home",
                 "devices": ["light.a", "light.b", "light.c"],
                 "cubes": [{
-                    "name": "n", "from": "candle_lighting", "to": "havdalah", "state": "off",
-                    "overrides": [{"device": "light.c", "state": "on"}],
+                    "name": "n", "from": "candle_lighting", "to": "havdalah",
+                    "devices": [off("light.a"), off("light.b"), on("light.c")],
                 }],
             }],
         }
@@ -276,8 +284,9 @@ def test_the_majority_decides_which_way_round_it_is():
     payload = plan_to_payload(plan)
     read = plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]})
 
-    assert read.groups[0].cubes[0].state == "off"
-    assert list(read.groups[0].cubes[0].overrides) == ["light.c"]
+    assert {d: w.state for d, w in read.groups[0].cubes[0].devices.items()} == {
+        "light.a": "off", "light.b": "off", "light.c": "on",
+    }
 
 
 def test_an_override_for_a_device_outside_the_group_is_refused():
@@ -343,9 +352,9 @@ def test_brightness_and_colour_survive_a_round_trip():
     })
     payload = plan_to_payload(plan)
     cube = plan_to_dict(plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]}))
-    cube = cube["groups"][0]["cubes"][0]
+    entry = cube["groups"][0]["cubes"][0]["devices"][0]
 
-    assert (cube["brightness"], cube["kelvin"]) == (40, 2200)
+    assert (entry["brightness"], entry["kelvin"]) == (40, 2200)
 
 
 @pytest.mark.parametrize(
@@ -596,9 +605,7 @@ def test_the_report_says_what_each_device_does_in_each_stretch():
 
     by_device = {d["device"]: d for d in stretch["devices"]}
     assert by_device["light.salon"]["state"] == "on"
-    assert by_device["light.salon"]["why"] == "group"
     assert by_device["switch.plata"]["state"] == "off"
-    assert by_device["switch.plata"]["why"] == "override"
 
 
 def test_the_report_puts_the_boundaries_in_words():
@@ -729,9 +736,9 @@ def test_every_device_state_survives_a_round_trip():
     read = plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]})
     meal = read.groups[0].cubes[0]
 
-    assert meal.overrides["climate.salon"].degrees == 16
-    assert meal.overrides["light.salon"].brightness == 50
-    assert meal.overrides["light.hallway"].brightness == 10
+    assert meal.devices["climate.salon"].degrees == 16
+    assert meal.devices["light.salon"].brightness == 50
+    assert meal.devices["light.hallway"].brightness == 10
 
 
 def test_a_setting_is_never_sent_to_something_that_cannot_take_it():
@@ -773,3 +780,92 @@ def test_a_temperature_out_of_range_is_told_the_range(degrees):
                  "state": "on", "degrees": degrees}]}],
         }))
     assert "5 to 35" in str(err.value)
+
+
+# --- a device the stretch leaves alone --------------------------------------
+#
+# Not the same as "off". The stretch does not act on it at all: it keeps
+# whatever it had, is not held to anything, is not retried, and any other
+# schedule is free to drive it.
+
+
+def plan_leaving_one_alone():
+    return plan_from_dict({
+        "name": "x",
+        "groups": [{
+            "name": "home",
+            "devices": ["light.salon", "switch.plata"],
+            "cubes": [{
+                "name": "n", "from": "candle_lighting", "to": "havdalah",
+                "devices": [on("light.salon")],
+            }],
+        }],
+    })
+
+
+def test_a_device_left_out_gets_no_action_at_all():
+    slot = plan_to_payload(plan_leaving_one_alone())["timeslots"][0]
+
+    assert [a["entity_id"] for a in slot["actions"]] == ["light.salon"]
+
+
+def test_leaving_a_device_out_is_not_the_same_as_turning_it_off():
+    slot = plan_to_payload(plan_leaving_one_alone())["timeslots"][0]
+
+    assert not any(a["entity_id"] == "switch.plata" for a in slot["actions"])
+
+
+def test_the_report_says_a_device_is_untouched_and_what_that_means():
+    from scheduler.plan_model import describe_plan
+
+    devices = describe_plan(plan_leaving_one_alone())["groups"][0]["stretches"][0]["devices"]
+    plata = next(d for d in devices if d["device"] == "switch.plata")
+
+    assert plata["state"] == "untouched"
+    assert "not held to anything" in plata["means"]
+    assert "is not retried" in plata["means"]
+
+
+def test_leaving_everybody_out_is_refused():
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(plan_from_dict({
+            "name": "x",
+            "groups": [{"name": "home", "devices": ["light.a"], "cubes": [
+                {"name": "n", "from": "candle_lighting", "to": "havdalah", "devices": []}]}],
+        }))
+    assert "names no devices" in str(err.value)
+
+
+def test_a_stretch_cannot_act_on_something_outside_its_group():
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(plan_from_dict({
+            "name": "x",
+            "groups": [{"name": "home", "devices": ["light.a"], "cubes": [
+                {"name": "n", "from": "candle_lighting", "to": "havdalah",
+                 "devices": [on("light.elsewhere")]}]}],
+        }))
+    assert "not in 'home'" in str(err.value)
+
+
+def test_the_older_written_form_is_still_read():
+    """Anything written before a stretch became a list must still work."""
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{
+            "name": "home", "devices": ["light.a", "light.b"],
+            "cubes": [{"name": "n", "from": "candle_lighting", "to": "havdalah",
+                       "state": "off", "overrides": [{"device": "light.b", "state": "on"}]}],
+        }],
+    })
+    states = {d: w.state for d, w in plan.groups[0].cubes[0].devices.items()}
+
+    assert states == {"light.a": "off", "light.b": "on"}
+
+
+def test_a_stretch_that_says_nothing_still_means_the_whole_group_on():
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{"name": "home", "devices": ["light.a", "light.b"], "cubes": [
+            {"name": "n", "from": "candle_lighting", "to": "havdalah"}]}],
+    })
+    assert set(plan.groups[0].cubes[0].devices) == {"light.a", "light.b"}
