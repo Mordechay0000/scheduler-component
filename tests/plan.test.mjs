@@ -738,8 +738,8 @@ export default async function run() {
         onAtCandleLighting: true,
         moments: [
           // deliberately out of order: the wizard puts the day in sequence
-          { id: 'a', name: 'בוקר', when: 'day', time: '06:30', on: true },
-          { id: 'b', name: 'שינה', when: 'eve', time: '22:30', on: false },
+          { id: 'a', name: 'בוקר', when: 'clock', time: '06:30', on: true },
+          { id: 'b', name: 'שינה', when: 'clock', time: '22:30', on: false },
         ],
       };
       dialog._finishWizard();
@@ -764,15 +764,15 @@ export default async function run() {
   await withPage(page(), async p => {
     const call = await p.evaluate(async () => {
       const dialog = window.__dialog;
-      dialog._wizardStep = 3;
+      dialog._wizardStep = 4;
       dialog._wizard = { ...dialog._wizard, entities: ['light.salon'], onAtCandleLighting: true };
       // the presets are a starting point, and anything can be added by hand
-      dialog._addMoment({ key: 'meal_eve', when: 'eve', time: '20:00', on: true });
-      dialog._addMoment({ key: 'meal_day', when: 'day', time: '12:00', on: true });
+      dialog._addMoment({ key: 'meal_eve', when: 'clock', time: '20:00', on: true });
+      dialog._addMoment({ key: 'meal_day', when: 'clock', time: '12:00', on: true });
       dialog._addMoment();
       const own = dialog._wizard.moments[2];
-      dialog._updateMoment(own.id, { name: 'שנת צהריים', when: 'day', time: '14:30', on: false });
-      dialog._addMoment({ key: 'close', when: 'before_end', time: '00:30', on: true });
+      dialog._updateMoment(own.id, { name: 'שנת צהריים', when: 'clock', time: '14:30', on: false });
+      dialog._addMoment({ key: 'close', when: 'end', time: '00:30', before: true, on: true });
       await dialog.updateComplete;
       dialog._finishWizard();
       await dialog.updateComplete;
@@ -798,12 +798,12 @@ export default async function run() {
         entities: ['light.salon'],
         onAtCandleLighting: true,
         moments: [
-          { id: 'a', name: 'סעודה', when: 'day', time: '12:00', on: true },
-          // 10:00 on the evening side is before candle lighting: outside the band
-          { id: 'b', name: 'מוקדם מדי', when: 'eve', time: '10:00', on: true },
+          { id: 'a', name: 'סעודה', when: 'clock', time: '12:00', on: true },
+          // an evening reading before candle lighting: outside the band
+          { id: 'b', name: 'מוקדם מדי', when: 'clock', time: '17:00', on: true },
         ],
       };
-      dialog._wizardStep = 4;
+      dialog._wizardStep = 6;
       await dialog.updateComplete;
       const root = dialog.shadowRoot;
       return {
@@ -836,11 +836,11 @@ export default async function run() {
         entities: ['climate.salon', 'climate.bedroom', 'light.salon'],
         onAtCandleLighting: false,
         moments: [
-          { id: 'meal', name: 'סעודה', when: 'eve', time: '20:00', on: false },
-          { id: 'night', name: 'שינה', when: 'eve', time: '23:00', on: false },
+          { id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', on: false },
+          { id: 'night', name: 'שינה', when: 'clock', time: '23:00', on: false },
         ],
       };
-      dialog._wizardStep = 3;
+      dialog._wizardStep = 4;
       await dialog.updateComplete;
 
       // during the meal: the salon air conditioner and a dim light; the bedroom off
@@ -880,9 +880,9 @@ export default async function run() {
       dialog._wizard = {
         entities: ['climate.salon', 'light.salon'],
         onAtCandleLighting: true,
-        moments: [{ id: 'meal', name: 'סעודה', when: 'eve', time: '20:00', on: true }],
+        moments: [{ id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', on: true }],
       };
-      dialog._wizardStep = 3;
+      dialog._wizardStep = 4;
       await dialog.updateComplete;
       return {
         moments: dialog.shadowRoot.querySelectorAll('.wizard-moment').length,
@@ -900,6 +900,313 @@ export default async function run() {
       await window.__dialog.updateComplete;
     });
     s.ok(await count(p, '.help p') === 4, 'the editor can explain itself in place');
+  }, JERUSALEM);
+
+  // --- a moment says only where it ends ------------------------------------
+  //
+  // There is no "which side of Shabbat is this on" any more, because there was
+  // never a real question there: a stretch begins where the one before it
+  // ended, so the only thing to ask is when it ends. Three ways to say that,
+  // and each writes a different kind of boundary.
+
+  await withPage(page(), async p => {
+    const written = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const at = (when, time, before) => dialog._momentBoundary({ when, time, before });
+      dialog._wizardStep = 3;
+      dialog._addMoment();
+      await dialog.updateComplete;
+      return {
+        options: [...dialog.shadowRoot.querySelectorAll('.moment select option')].map(o => o.value),
+        evening: at('clock', '22:30'),
+        morning: at('clock', '06:30'),
+        afterSunset: at('sunset', '01:30', false),
+        beforeSunset: at('sunset', '00:20', true),
+        beforeEnd: at('end', '00:30', true),
+        afterEnd: at('end', '01:00', false),
+      };
+    });
+
+    s.ok(written.options.join() === 'clock,sunset,end',
+      'a moment is asked only where it ends, in the three ways people say it');
+    s.ok(written.evening === CANDLE + '@22:30:00',
+      'an evening reading belongs to the day the band opened');
+    s.ok(written.morning === HAVDALAH + '@06:30:00',
+      'and a morning one to the day it closes');
+    s.ok(written.afterSunset === 'sunset+01:30:00', 'sunset can be measured forwards');
+    s.ok(written.beforeSunset === 'sunset-00:20:00', 'and backwards');
+    s.ok(written.beforeEnd === HAVDALAH + '-00:30:00', 'havdalah likewise');
+    s.ok(written.afterEnd === HAVDALAH + '+01:00:00', 'in both directions');
+  }, JERUSALEM);
+
+  // --- the editor asks the same one question ------------------------------
+
+  await withPage(page(), async p => {
+    const moved = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const group = dialog._plan.groups[0];
+      dialog._selected = group.cubes[1].id;
+      await dialog.updateComplete;
+
+      const fields = {
+        boundaries: dialog.shadowRoot.querySelectorAll('.inspector .field.boundary').length,
+        start: dialog.shadowRoot.querySelector('.inspector .field-value.fixed')?.textContent.trim(),
+      };
+
+      const target = new Date(dialog._moment(group.cubes[1].stop));
+      target.setHours(target.getHours() - 1);
+      dialog._setCubeEnd(group, group.cubes[1], dialog._boundaryFromDate(target));
+      await dialog.updateComplete;
+
+      const after = dialog._plan.groups[0].cubes;
+      return {
+        fields,
+        stop: dialog._moment(after[1].stop).getTime(),
+        nextStart: dialog._moment(after[2].start).getTime(),
+        untouched: dialog._moment(after[0].stop).getTime()
+          === dialog._moment(after[1].start).getTime(),
+      };
+    });
+
+    s.ok(moved.fields.boundaries === 1,
+      'a stretch is asked only where it ends - its start is where the one before it finished');
+    s.ok(moved.fields.start && moved.fields.start !== '—', 'and that start is shown, not hidden');
+    s.ok(moved.stop === moved.nextStart,
+      'moving the end moves where the next one begins, so they still meet');
+    s.ok(moved.untouched, 'and the boundary before it is left where it was');
+  }, JERUSALEM);
+
+  // --- checked while it is being built, not after --------------------------
+
+  await withPage(page(), async p => {
+    const checked = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const read = () => ({
+        blocking: dialog._wizardProblems().blocking.length,
+        blocked: dialog._wizardBlocked('moments'),
+        next: dialog.shadowRoot.querySelector('.wizard-buttons .primary')?.disabled,
+        shown: dialog.shadowRoot.querySelectorAll('.wizard-warning.blocking').length,
+      });
+
+      dialog._wizardStep = 3;
+      dialog._wizard = {
+        entities: ['light.salon'],
+        onAtCandleLighting: true,
+        // 17:00 on the opening day is before candle lighting: outside the band
+        moments: [{ id: 'a', name: 'מוקדם מדי', when: 'clock', time: '17:00', on: true }],
+      };
+      await dialog.updateComplete;
+      const outside = read();
+
+      dialog._updateMoment('a', { time: '22:30' });
+      await dialog.updateComplete;
+      const fixed = read();
+
+      dialog._addMoment();
+      dialog._updateMoment(dialog._wizard.moments[1].id, { name: 'שוב', when: 'clock', time: '22:30' });
+      await dialog.updateComplete;
+      const collided = read();
+
+      return { outside, fixed, collided };
+    });
+
+    s.ok(checked.outside.blocking === 1 && checked.outside.blocked,
+      'a moment that falls outside Shabbat is caught as it is typed');
+    s.ok(checked.outside.next === true, 'and the wizard will not move on until it changes');
+    s.ok(checked.outside.shown === 1, 'saying so on the screen rather than only in the button');
+    s.ok(!checked.fixed.blocked && checked.fixed.next === false,
+      'moving it inside the band clears the way again');
+    s.ok(checked.collided.blocking === 1 && checked.collided.blocked,
+      'and two moments on the same minute are blocked too');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const said = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizardStep = 3;
+      dialog._wizard = {
+        entities: ['light.salon'],
+        onAtCandleLighting: true,
+        moments: [
+          { id: 'a', name: 'שינה', when: 'clock', time: '22:30', on: false },
+          { id: 'b', name: 'מוצאי', when: 'end', time: '00:30', before: true, on: true },
+        ],
+      };
+      await dialog.updateComplete;
+      const problems = dialog._wizardProblems();
+      return {
+        blocking: problems.blocking.length,
+        warnings: problems.warnings,
+        marks: dialog.shadowRoot.querySelectorAll('.moment-caution').length,
+      };
+    });
+
+    s.ok(said.blocking === 0, 'a workable day is not blocked for using a clock time');
+    s.ok(said.warnings.length === 1 && said.warnings[0].includes('שינה'),
+      'but the one hard time is named');
+    s.ok(!said.warnings[0].includes('מוצאי'),
+      'and the one measured from havdalah is not, because it moves with the year');
+    s.ok(said.warnings[0].includes('לא תפעל') || said.warnings[0].includes('לא יפעל'),
+      'the warning says what will actually happen on a Shabbat where it lands outside');
+    s.ok(said.marks === 1, 'and the moment itself is marked where it is typed');
+  }, JERUSALEM);
+
+  // --- devices come from the book, not from a list of entity ids -----------
+
+  await withPage(page(), async p => {
+    const picked = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._book = {
+        groups: [{ name: 'מזגנים', devices: ['climate.salon', 'climate.bedroom'] }],
+        devices: [
+          { entity_id: 'light.salon', name: 'סלון', alias: 'תאורת הסלון', kind: 'light', groups: [] },
+        ],
+        kinds: [],
+      };
+      dialog._wizardStep = 1;
+      await dialog.updateComplete;
+      const before = {
+        chips: dialog.shadowRoot.querySelectorAll('.wizard-devices .chip').length,
+        pickers: dialog.shadowRoot.querySelectorAll('.wizard-devices scheduler-entity-picker').length,
+        named: [...dialog.shadowRoot.querySelectorAll('.wizard-devices .chip.device')]
+          .map(e => e.textContent.trim()),
+      };
+
+      dialog.shadowRoot.querySelector('.wizard-devices .chip').click();
+      await dialog.updateComplete;
+      const afterGroup = [...dialog._wizard.entities];
+
+      dialog._wizardAdvanced = true;
+      await dialog.updateComplete;
+      const pickers = dialog.shadowRoot.querySelectorAll('.wizard-devices scheduler-entity-picker').length;
+
+      return { before, afterGroup, pickers };
+    });
+
+    s.ok(picked.before.chips === 2, 'the book is what the wizard offers: a group and a named device');
+    s.ok(picked.before.named[0].includes('תאורת הסלון'),
+      'under the name the household gave it, not its entity id');
+    s.ok(picked.before.pickers === 0, 'the raw entity list is not in the way');
+    s.ok(picked.afterGroup.length === 2 && picked.afterGroup.includes('climate.salon'),
+      'a group goes in whole, in one click');
+    s.ok(picked.pickers === 1, 'and the raw list is still there for anything the book never heard of');
+  }, JERUSALEM);
+
+  // --- the times this household keeps --------------------------------------
+
+  await withPage(page(), async p => {
+    const kept = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._settingsOpen = true;
+      await dialog.updateComplete;
+      const rows = dialog.shadowRoot.querySelectorAll('.moments.defaults .moment').length;
+
+      // the meal runs until five minutes after sunset, and the night to eight
+      dialog._setDefaultMoment('meal_eve', { when: 'sunset', time: '00:05', before: false });
+      dialog._setDefaultMoment('sleep', { when: 'clock', time: '20:00' });
+      dialog._setDefaultMoment('meal_day', { when: 'end', time: '00:05', before: true });
+      await dialog.updateComplete;
+
+      dialog._settingsOpen = false;
+      dialog._wizardStep = 3;
+      dialog._wizard = { entities: ['light.salon'], onAtCandleLighting: true, moments: [] };
+      await dialog.updateComplete;
+      dialog._addMoment(dialog._prefs.moments.find(m => m.key === 'meal_eve'));
+      dialog._addMoment(dialog._prefs.moments.find(m => m.key === 'sleep'));
+      dialog._addMoment(dialog._prefs.moments.find(m => m.key === 'meal_day'));
+      await dialog.updateComplete;
+
+      return {
+        rows,
+        stored: JSON.parse(window.localStorage.getItem('scheduler-card.plan-prefs')).moments
+          .find(m => m.key === 'meal_eve'),
+        boundaries: dialog._wizard.moments.map(m => dialog._momentBoundary(m)),
+      };
+    });
+
+    s.ok(kept.rows === 6, 'every moment the wizard offers has a time this household can set');
+    s.ok(kept.stored.time === '00:05' && kept.stored.when === 'sunset',
+      'and it is remembered rather than asked again next time');
+    s.ok(kept.boundaries[0] === 'sunset+00:05:00', 'the meal ends five minutes after sunset');
+    s.ok(kept.boundaries[1] === CANDLE + '@20:00:00', 'the night ends at eight, on the clock');
+    s.ok(kept.boundaries[2] === HAVDALAH + '-00:05:00',
+      'and the day meal five minutes before havdalah');
+  }, JERUSALEM);
+
+  // --- a "?" wherever the question comes up --------------------------------
+
+  await withPage(page(), async p => {
+    const answered = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const seen = {};
+      const open = async key => {
+        dialog._helpKey = key;
+        await dialog.updateComplete;
+        const note = dialog.shadowRoot.querySelector('.help-note');
+        seen[key] = note ? note.textContent.trim().length : 0;
+      };
+
+      dialog._selected = dialog._plan.groups[0].cubes[0].id;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon']);
+      await dialog.updateComplete;
+      const inspector = dialog.shadowRoot.querySelectorAll('.inspector .help-toggle').length;
+      await open('cube');
+      await open('devices');
+      await open('group');
+
+      dialog._helpKey = null;
+      dialog._settingsOpen = true;
+      await dialog.updateComplete;
+      const settings = dialog.shadowRoot.querySelectorAll('.book .help-toggle').length;
+      await open('colours');
+      await open('times');
+
+      dialog._helpKey = null;
+      dialog._settingsOpen = false;
+      dialog._wizardStep = 3;
+      await dialog.updateComplete;
+      const wizard = dialog.shadowRoot.querySelectorAll('.wizard .help-toggle').length;
+      await open('step_moments');
+
+      return { seen, inspector, settings, wizard };
+    });
+
+    s.ok(answered.inspector >= 2, 'the stretch and its devices each carry their own "?"');
+    s.ok(answered.settings >= 3, 'so does every preference');
+    s.ok(answered.wizard >= 1, 'and every step of the wizard');
+    s.ok(Object.values(answered.seen).every(length => length > 60),
+      'and each one answers in plain words rather than a label');
+  }, JERUSALEM);
+
+  // --- holding the state is asked once, for the whole plan -----------------
+
+  await withPage(page(), async p => {
+    const held = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizard = {
+        entities: ['light.salon'],
+        onAtCandleLighting: true,
+        moments: [{ id: 'a', name: 'שינה', when: 'clock', time: '22:30', on: false }],
+        hold: false,
+      };
+      dialog._wizardStep = 5;
+      await dialog.updateComplete;
+      const buttons = dialog.shadowRoot.querySelectorAll('.wizard .segmented button').length;
+      dialog._finishWizard();
+      await dialog.updateComplete;
+      const off = dialog._plan.groups[0].cubes.every(c => c.enforce === false);
+
+      dialog._wizard = { ...dialog._wizard, hold: true };
+      dialog._finishWizard();
+      await dialog.updateComplete;
+      const on = dialog._plan.groups[0].cubes.every(c => c.enforce === true);
+
+      return { buttons, off, on };
+    });
+
+    s.ok(held.buttons === 2, 'the wizard asks whether the plan should hold its state');
+    s.ok(held.off, 'and a plan that should not hold is built without it');
+    s.ok(held.on, 'while one that should, holds in every stretch');
   }, JERUSALEM);
 
   // --- the device book -----------------------------------------------------
