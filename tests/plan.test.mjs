@@ -310,13 +310,20 @@ export default async function run() {
   // --- holding a device to what was set ------------------------------------
 
   await withPage(page(), async p => {
+    const call = await saveWith(p);
+
+    s.ok(call.data.timeslots.every(e => e.enforce === true),
+      'a Shabbat plan holds its state by default - that is what one is for');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
     const call = await saveWith(p, `
       const group = dialog._plan.groups[0];
-      dialog._updateCube(group.track, group.cubes[0].id, { enforce: true });
+      dialog._updateCube(group.track, group.cubes[1].id, { enforce: false });
     `);
 
     s.ok(call.data.timeslots[0].enforce === true, 'the hold is saved with the stretch');
-    s.ok(!call.data.timeslots[1].enforce, 'and only for the stretch it was set on');
+    s.ok(call.data.timeslots[1].enforce === false, 'and can be turned off for one of them');
   }, JERUSALEM);
 
   // --- undo, redo and the keyboard ----------------------------------------
@@ -377,9 +384,10 @@ export default async function run() {
     s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].action.service.endsWith('turn_off')),
       'O flips the state');
 
+    const held = await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].enforce);
     await press(p, 'h');
-    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].enforce === true),
-      'H holds the state');
+    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].enforce) !== held,
+      'H turns holding the state on and off');
 
     await press(p, '3');
     s.ok(await p.evaluate(() => !!window.__dialog._plan.groups[0].cubes[0].color),

@@ -35,6 +35,7 @@ import {
   PlanCube,
   PlanDetach,
   PlanGroup,
+  HOLDS_BY_DEFAULT,
   defaultPlan,
   detachTrack,
   groupTrack,
@@ -1880,6 +1881,7 @@ export class DialogSchedulerPlan extends LitElement {
         ? boundaries[i + 1].at
         : `${this._plan.endAnchor}+01:30:00`,
       action: act(boundary.on),
+      enforce: HOLDS_BY_DEFAULT,
     }));
 
     this._updatePlan({

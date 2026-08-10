@@ -255,6 +255,15 @@ export const planToSchedule = (plan: Plan, base: Schedule): Schedule => {
 export const isPlan = (schedule: { tags?: string[] }) =>
   (schedule.tags || []).includes(PLAN_TAG);
 
+/**
+ * A Shabbat plan holds its state by default.
+ *
+ * That is the whole point of one: a switch pressed out of habit, or an
+ * automation that does not know it is Shabbat, should not leave a device wrong
+ * until the morning. An ordinary schedule does not do this unless asked.
+ */
+export const HOLDS_BY_DEFAULT = true;
+
 const onAction = (domain: string): Action => ({
   service: `${domain}.turn_on`,
   service_data: {},
@@ -285,11 +294,11 @@ export const defaultPlan = (name: string, cubeNames: string[]): Plan => {
         name: cubeNames[5] || 'group',
         entities: [],
         cubes: [
-          { id: 'c0', name: cubeNames[0], start: `${start}+00:00:00`, stop: `${start}@22:30:00`, action: onAction('switch') },
-          { id: 'c1', name: cubeNames[1], start: `${start}@22:30:00`, stop: `${end}@06:30:00`, action: offAction('switch') },
-          { id: 'c2', name: cubeNames[2], start: `${end}@06:30:00`, stop: `${end}@13:00:00`, action: onAction('switch') },
-          { id: 'c3', name: cubeNames[3], start: `${end}@13:00:00`, stop: `${end}-00:30:00`, action: offAction('switch') },
-          { id: 'c4', name: cubeNames[4], start: `${end}-00:30:00`, stop: `${end}+01:30:00`, action: onAction('switch') },
+          { id: 'c0', name: cubeNames[0], start: `${start}+00:00:00`, stop: `${start}@22:30:00`, action: onAction('switch'), enforce: HOLDS_BY_DEFAULT },
+          { id: 'c1', name: cubeNames[1], start: `${start}@22:30:00`, stop: `${end}@06:30:00`, action: offAction('switch'), enforce: HOLDS_BY_DEFAULT },
+          { id: 'c2', name: cubeNames[2], start: `${end}@06:30:00`, stop: `${end}@13:00:00`, action: onAction('switch'), enforce: HOLDS_BY_DEFAULT },
+          { id: 'c3', name: cubeNames[3], start: `${end}@13:00:00`, stop: `${end}-00:30:00`, action: offAction('switch'), enforce: HOLDS_BY_DEFAULT },
+          { id: 'c4', name: cubeNames[4], start: `${end}-00:30:00`, stop: `${end}+01:30:00`, action: onAction('switch'), enforce: HOLDS_BY_DEFAULT },
         ],
       },
     ],
