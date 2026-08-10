@@ -30,17 +30,26 @@ export interface PlanCube {
   name: string;
   start: string;
   stop: string;
-  /** what most of the group's devices do in this stretch */
-  action: Action;
   /**
-   * One device doing something else, here, without the timeline being copied
-   * for it: the group's lights on while its hotplate stays off.
+   * The devices this stretch acts on, each with its own action.
+   *
+   * A stretch has no state of its own. A device missing from here is one the
+   * stretch does not touch at all: not switched, not held to anything, not
+   * retried. It keeps whatever it had, and any other schedule may drive it.
    */
-  overrides?: Record<string, Action>;
-  /** an explicit colour; without one the action decides how it is drawn */
+  devices: Record<string, Action>;
+  /** an explicit colour; without one the actions decide how it is drawn */
   color?: string;
-  /** put the devices back if something else moves them during this stretch */
+  /** put these devices back if something else moves them during this stretch */
   enforce?: boolean;
+  /**
+   * What a newly added device should do here, until it is set by hand.
+   *
+   * Editor-only and never saved: a stretch is its devices, but a template has
+   * no devices yet, and a group's members have to land somewhere sensible when
+   * they are first picked.
+   */
+  suggestOn?: boolean;
 }
 
 export interface PlanGroup {
@@ -89,48 +98,28 @@ const withTargets = (action: Action, entities: string[]): Action => ({
   target: { entity_id: entities },
 });
 
-/** what one device is asked to do, so two of them can be compared */
-const actionKey = (action?: Action) =>
-  action ? `${action.service}|${JSON.stringify(action.service_data || {})}` : '';
+/** what a stretch asks of a device, or undefined if it asks nothing */
+export const cubeActionFor = (cube: PlanCube, device: string): Action | undefined =>
+  cube.devices?.[device];
 
-/** the action a device gets in a stretch: its own if it has one, else the group's */
-export const cubeActionFor = (cube: PlanCube, device: string): Action =>
-  cube.overrides?.[device] || cube.action;
+export const cubeTouches = (cube: PlanCube, device: string) =>
+  Boolean(cube.devices && device in cube.devices);
 
-/**
- * Split a stretch's actions into "what the group does" and "who differs".
- *
- * Whatever most devices are doing is the stretch's own state; anything else is
- * that device's override. This is what lets one device differ inside a stretch
- * without the whole timeline being duplicated for it.
- */
-const splitActions = (actions: Action[]) => {
-  const perDevice = new Map<string, Action>();
+/** the plain on/off action a device would get */
+export const plainAction = (device: string, on: boolean): Action => ({
+  service: `${device.split('.')[0]}.turn_${on ? 'on' : 'off'}`,
+  service_data: {},
+});
+
+/** every device a stretch names, read out of its stored actions */
+const devicesOf = (actions: Action[]): Record<string, Action> => {
+  const out: Record<string, Action> = {};
   actions.forEach(action => {
     [action.target?.entity_id || []].flat().forEach(entity => {
-      if (entity) perDevice.set(entity, { ...action, target: { entity_id: entity } });
+      if (entity) out[entity] = { ...action, target: undefined };
     });
   });
-
-  const tally = new Map<string, number>();
-  perDevice.forEach(action => tally.set(actionKey(action), (tally.get(actionKey(action)) || 0) + 1));
-
-  let winner = '';
-  let best = -1;
-  tally.forEach((count, key) => {
-    if (count > best) {
-      best = count;
-      winner = key;
-    }
-  });
-
-  const common = [...perDevice.values()].find(a => actionKey(a) == winner) || actions[0];
-  const overrides: Record<string, Action> = {};
-  perDevice.forEach((action, device) => {
-    if (actionKey(action) != winner) overrides[device] = { ...action, target: undefined };
-  });
-
-  return { action: { ...common, target: undefined } as Action, overrides };
+  return out;
 };
 
 /** the anchor an anchored time is measured against, if it has one */
@@ -184,7 +173,7 @@ export const planFromSchedule = (schedule?: Schedule): Plan => {
         stop: slot.stop || slot.start,
         color: slot.color,
         enforce: slot.enforce,
-        ...splitActions(slot.actions),
+        devices: devicesOf(slot.actions),
       })),
     });
   });
@@ -214,11 +203,11 @@ export const planToSchedule = (plan: Plan, base: Schedule): Schedule => {
         enforce: cube.enforce,
         track: group.track,
         priority: 0,
-        // one action per device, so a device can differ inside the stretch
-        // without the stretch being copied for it
-        actions: group.entities.map(device =>
-          withTargets(cubeActionFor(cube, device), [device])
-        ),
+        // one action per device the stretch names, and none at all for the
+        // ones it deliberately leaves alone
+        actions: group.entities
+          .filter(device => cubeTouches(cube, device))
+          .map(device => withTargets(cube.devices[device], [device])),
         conditions: emptyConditions(),
       });
     });
@@ -264,16 +253,6 @@ export const isPlan = (schedule: { tags?: string[] }) =>
  */
 export const HOLDS_BY_DEFAULT = true;
 
-const onAction = (domain: string): Action => ({
-  service: `${domain}.turn_on`,
-  service_data: {},
-});
-
-const offAction = (domain: string): Action => ({
-  service: `${domain}.turn_off`,
-  service_data: {},
-});
-
 /**
  * The plan the artwork describes: one band from candle lighting to havdalah,
  * cut into named stretches. The interior boundaries are ordinary clock times
@@ -294,11 +273,11 @@ export const defaultPlan = (name: string, cubeNames: string[]): Plan => {
         name: cubeNames[5] || 'group',
         entities: [],
         cubes: [
-          { id: 'c0', name: cubeNames[0], start: `${start}+00:00:00`, stop: `${start}@22:30:00`, action: onAction('switch'), enforce: HOLDS_BY_DEFAULT },
-          { id: 'c1', name: cubeNames[1], start: `${start}@22:30:00`, stop: `${end}@06:30:00`, action: offAction('switch'), enforce: HOLDS_BY_DEFAULT },
-          { id: 'c2', name: cubeNames[2], start: `${end}@06:30:00`, stop: `${end}@13:00:00`, action: onAction('switch'), enforce: HOLDS_BY_DEFAULT },
-          { id: 'c3', name: cubeNames[3], start: `${end}@13:00:00`, stop: `${end}-00:30:00`, action: offAction('switch'), enforce: HOLDS_BY_DEFAULT },
-          { id: 'c4', name: cubeNames[4], start: `${end}-00:30:00`, stop: `${end}+01:30:00`, action: onAction('switch'), enforce: HOLDS_BY_DEFAULT },
+          { id: 'c0', name: cubeNames[0], start: `${start}+00:00:00`, stop: `${start}@22:30:00`, devices: {}, enforce: HOLDS_BY_DEFAULT, suggestOn: true },
+          { id: 'c1', name: cubeNames[1], start: `${start}@22:30:00`, stop: `${end}@06:30:00`, devices: {}, enforce: HOLDS_BY_DEFAULT, suggestOn: false },
+          { id: 'c2', name: cubeNames[2], start: `${end}@06:30:00`, stop: `${end}@13:00:00`, devices: {}, enforce: HOLDS_BY_DEFAULT, suggestOn: true },
+          { id: 'c3', name: cubeNames[3], start: `${end}@13:00:00`, stop: `${end}-00:30:00`, devices: {}, enforce: HOLDS_BY_DEFAULT, suggestOn: false },
+          { id: 'c4', name: cubeNames[4], start: `${end}-00:30:00`, stop: `${end}+01:30:00`, devices: {}, enforce: HOLDS_BY_DEFAULT, suggestOn: true },
         ],
       },
     ],

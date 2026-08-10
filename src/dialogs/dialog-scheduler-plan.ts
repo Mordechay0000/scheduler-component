@@ -1,6 +1,7 @@
 import {
   mdiBookmarkMultipleOutline,
   mdiCallSplit,
+  mdiCogOutline,
   mdiClipboardTextClockOutline,
   mdiClose,
   mdiHelpCircleOutline,
@@ -48,6 +49,8 @@ import {
   detachTrack,
   groupTrack,
   cubeActionFor,
+  cubeTouches,
+  plainAction,
   planFromSchedule,
   planToSchedule,
 } from "../data/plan/plan_model";
@@ -186,6 +189,9 @@ export class DialogSchedulerPlan extends LitElement {
   @state() private _book: DeviceBook = EMPTY_BOOK;
   @state() private _bookOpen = false;
   @state() private _newGroup = "";
+  /** unmistakable green/grey for on and off, rather than shades of the action */
+  @state() private _plainColours = true;
+  @state() private _settingsOpen = false;
   @state() private _report: PlanReport | null = null;
   @state() private _saved = false;
 
@@ -334,7 +340,7 @@ export class DialogSchedulerPlan extends LitElement {
         return;
       case 'r':
         ev.preventDefault();
-        this._showReport();
+        this._toggleReport();
         return;
       case 'w':
         ev.preventDefault();
@@ -414,7 +420,7 @@ export class DialogSchedulerPlan extends LitElement {
     const selected = this._selectedCube();
     if (selected) {
       this._updateCube(selected.group.track, selected.cube.id, {
-        action: this._invert(selected.cube),
+        devices: this._invertDevices(selected.cube),
       });
       return;
     }
@@ -437,6 +443,16 @@ export class DialogSchedulerPlan extends LitElement {
 
   private _showReport() {
     this._report = describePlan(this._plan, this.hass);
+  }
+
+  /** the same button closes it again - anything else is just confusing */
+  private _toggleReport() {
+    if (this._report) {
+      this._report = null;
+      this._saved = false;
+      return;
+    }
+    this._showReport();
   }
 
   // --- the band -----------------------------------------------------------
@@ -817,9 +833,9 @@ export class DialogSchedulerPlan extends LitElement {
       name: '',
       color: undefined,
       start: boundary,
-      // a new stretch defaults to the opposite of the one it came out of,
-      // which is what the ordinary editor does when a slot is carved
-      action: this._invert(cube),
+      // a new stretch keeps the same devices but flips each of them, which is
+      // what the ordinary editor does when a slot is carved
+      devices: this._invertDevices(cube),
     };
     const cubes = [...group.cubes];
     cubes.splice(index, 1, { ...cube, stop: boundary }, second);
@@ -827,10 +843,13 @@ export class DialogSchedulerPlan extends LitElement {
     this._selected = second.id;
   }
 
-  private _invert(cube: PlanCube) {
-    const domain = cube.action.service.split('.')[0];
-    const turning = computeEntity(cube.action.service) == 'turn_off' ? 'turn_on' : 'turn_off';
-    return { ...cube.action, service: `${domain}.${turning}`, service_data: {} };
+  /** the same devices, each doing the opposite */
+  private _invertDevices(cube: PlanCube): Record<string, Action> {
+    const out: Record<string, Action> = {};
+    Object.entries(cube.devices || {}).forEach(([entity, action]) => {
+      out[entity] = invertOnOffAction(action) || action;
+    });
+    return out;
   }
 
   private _removeCube(group: PlanGroup, cube: PlanCube) {
@@ -869,8 +888,24 @@ export class DialogSchedulerPlan extends LitElement {
   }
 
   private _setMembers(group: PlanGroup, entities: string[]) {
+    const added = entities.filter(e => !group.entities.includes(e));
+    const withDevices = (cube: PlanCube) => {
+      const devices = { ...(cube.devices || {}) };
+      // a device just added lands wherever the stretch suggests, and one
+      // removed from the group leaves every stretch with it
+      added.forEach(entity => {
+        devices[entity] = plainAction(entity, cube.suggestOn !== false);
+      });
+      Object.keys(devices).forEach(entity => {
+        if (!entities.includes(entity)) delete devices[entity];
+      });
+      return { ...cube, devices };
+    };
+
     this._updatePlan({
-      groups: this._plan.groups.map(g => (g.track == group.track ? { ...g, entities } : g)),
+      groups: this._plan.groups.map(g =>
+        g.track == group.track ? { ...g, entities, cubes: g.cubes.map(withDevices) } : g
+      ),
       // a device that left the group has nothing to be detached from
       detaches: this._plan.detaches.filter(
         d => entities.includes(d.entity)
@@ -963,6 +998,7 @@ export class DialogSchedulerPlan extends LitElement {
       ${this._offerWizard ? this._renderWizardOffer() : nothing}
       ${this._help ? this._renderHelp() : nothing}
       ${this._keys ? this._renderKeys() : nothing}
+      ${this._settingsOpen ? this._renderSettings() : nothing}
       ${this._bookOpen ? this._renderBook() : nothing}
       ${this._report ? this._renderReport(this._report) : nothing}
       ${this._bandStart && this._bandEnd ? this._renderBand() : this._renderMissingAnchors()}
@@ -1005,12 +1041,12 @@ export class DialogSchedulerPlan extends LitElement {
             @click=${() => { this._keys = !this._keys; }}
           ><ha-svg-icon .path=${mdiKeyboardOutline}></ha-svg-icon></button>
           <button
-            class="ghost ${this._bookOpen ? 'primary' : ''}"
-            @click=${() => { this._bookOpen = !this._bookOpen; }}
+            class="ghost ${this._settingsOpen ? 'primary' : ''}"
+            @click=${() => { this._settingsOpen = !this._settingsOpen; this._bookOpen = false; }}
           >
-            <ha-svg-icon .path=${mdiBookmarkMultipleOutline}></ha-svg-icon>${this._t('book.open')}
+            <ha-svg-icon .path=${mdiCogOutline}></ha-svg-icon>${this._t('settings.open')}
           </button>
-          <button class="ghost" @click=${this._showReport}>
+          <button class="ghost ${this._report ? 'primary' : ''}" @click=${this._toggleReport}>
             <ha-svg-icon .path=${mdiClipboardTextClockOutline}></ha-svg-icon>${this._t('report.open')}
           </button>
           <button class="ghost" @click=${() => { this._wizardStep = 0; }}>
@@ -1129,10 +1165,13 @@ export class DialogSchedulerPlan extends LitElement {
                 ${stretch.devices.map(device => html`
                 <span class="report-device ${device.state}">
                   ${device.name}
-                  <b>${this._t(device.state == 'on' ? 'state.on' : 'state.off')}</b>
+                  <b>${this._t(
+      device.state == 'untouched' ? 'device.untouched'
+        : device.state == 'on' ? 'state.on' : 'state.off'
+    )}</b>
                   ${device.brightness !== undefined ? html`<i>${device.brightness}%</i>` : nothing}
                   ${device.kelvin !== undefined ? html`<i>${device.kelvin}K</i>` : nothing}
-                  ${device.own ? html`<em>${this._t('report.own')}</em>` : nothing}
+                  ${device.degrees !== undefined ? html`<i>${device.degrees}°</i>` : nothing}
                   ${device.takenOverBy
             ? html`<em>${this._t('report.taken', '{name}', device.takenOverBy)}</em>`
             : nothing}
@@ -1141,6 +1180,46 @@ export class DialogSchedulerPlan extends LitElement {
             </div>
           </li>`)}
         </ol>
+      </div>
+    `;
+  }
+
+  /**
+   * Everything that is a preference rather than part of a plan.
+   *
+   * The device book lives here because building it is a one-off chore, not
+   * something to be doing in the middle of drawing a Shabbat.
+   */
+  private _renderSettings() {
+    return html`
+      <div class="book">
+        <div class="book-head">
+          <span class="report-title">${this._t('settings.title')}</span>
+          <span class="report-band">${this._t('settings.hint')}</span>
+          <button class="icon-only" @click=${() => { this._settingsOpen = false; }}>
+            <ha-svg-icon .path=${mdiClose}></ha-svg-icon>
+          </button>
+        </div>
+        <div class="book-body">
+          <div class="field">
+            <span class="field-label">${this._t('settings.colours')}</span>
+            <div class="segmented">
+              <button class=${this._plainColours ? 'active' : ''}
+                @click=${() => { this._plainColours = true; }}>${this._t('settings.colours_plain')}</button>
+              <button class=${this._plainColours ? '' : 'active'}
+                @click=${() => { this._plainColours = false; }}>${this._t('settings.colours_action')}</button>
+            </div>
+            <span class="field-resolved">${this._t('settings.colours_hint')}</span>
+          </div>
+
+          <div class="field">
+            <span class="field-label">${this._t('book.title')}</span>
+            <button class="ghost" @click=${() => { this._bookOpen = true; this._settingsOpen = false; }}>
+              <ha-svg-icon .path=${mdiBookmarkMultipleOutline}></ha-svg-icon>${this._t('book.open')}
+            </button>
+            <span class="field-resolved">${this._t('book.hint')}</span>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1340,15 +1419,34 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
-  /** an explicit colour wins; otherwise the action decides, as it does on the bar */
+  /**
+   * How a stretch is drawn.
+   *
+   * An explicit colour wins. Otherwise the devices decide: all on, all off, or
+   * a mix - and with plain colours turned on, on and off are unmistakable at a
+   * glance rather than a matter of shade.
+   */
+  private _cubeTone(cube: PlanCube): 'on' | 'off' | 'mixed' | 'empty' {
+    const actions = Object.values(cube.devices || {});
+    if (!actions.length) return 'empty';
+    const off = actions.filter(isOffAction).length;
+    if (off === actions.length) return 'off';
+    if (off === 0) return 'on';
+    return 'mixed';
+  }
+
   private _cubeStyle(cube: PlanCube) {
-    if (cube.color) {
-      return `background:${cube.color};color:#fff`;
-    }
-    const fromAction = computeActionColor(cube.action);
-    if (fromAction) {
-      const [r, g, b] = fromAction.rgb;
-      return `background:rgba(${r},${g},${b},${fromAction.alpha})`;
+    if (cube.color) return `background:${cube.color};color:#fff`;
+    if (this._plainColours) return '';
+
+    const actions = Object.values(cube.devices || {});
+    const lit = actions.filter(a => !isOffAction(a));
+    if (lit.length === actions.length && lit.length) {
+      const fromAction = computeActionColor(lit[0]);
+      if (fromAction) {
+        const [r, g, b] = fromAction.rgb;
+        return `background:rgba(${r},${g},${b},${fromAction.alpha})`;
+      }
     }
     return '';
   }
@@ -1358,11 +1456,11 @@ export class DialogSchedulerPlan extends LitElement {
     const to = this._position(cube.stop);
     if (from === null || to === null || to <= from) return nothing;
 
-    const off = isOffAction(cube.action);
+    const tone = this._cubeTone(cube);
     const selected = this._selected == cube.id;
     return html`
       <button
-        class="cube ${off ? 'off' : 'on'} ${selected ? 'selected' : ''}"
+        class="cube tone-${tone} ${this._plainColours ? 'plain' : ''} ${selected ? 'selected' : ''}"
         style="inset-inline-start:${(from * 100).toFixed(3)}%;width:${((to - from) * 100).toFixed(3)}%;${this._cubeStyle(cube)}"
         title="${this._formatMoment(cube.start)} – ${this._formatMoment(cube.stop)}"
         @click=${() => { this._selected = cube.id; }}
@@ -1454,17 +1552,7 @@ export class DialogSchedulerPlan extends LitElement {
           ${this._renderBoundaryField(this._t('boundary.to'), cube.stop, value =>
           this._updateCube(group.track, cube.id, { stop: value })
         )}
-          ${this._renderStateField(isOffAction(cube.action), off =>
-          this._updateCube(group.track, cube.id, {
-            action: {
-              ...cube.action,
-              service: `${cube.action.service.split('.')[0]}.${off ? 'turn_off' : 'turn_on'}`,
-            },
-          })
-        )}
-          ${this._renderLightFields(cube.action, action =>
-          this._updateCube(group.track, cube.id, { action })
-        )}
+          ${this._renderAllDevicesField(group, cube)}
           ${this._renderColorField(cube.color, color => this._updateCube(group.track, cube.id, { color }))}
           ${this._renderEnforceField(cube.enforce, enforce =>
           this._updateCube(group.track, cube.id, { enforce })
@@ -1680,44 +1768,51 @@ export class DialogSchedulerPlan extends LitElement {
     return this._deviceRow(
       entity,
       cubeActionFor(cube, entity),
-      Boolean(cube.overrides?.[entity]),
       action => this._setDeviceAction(group, cube, entity, action),
       () => this._clearDeviceAction(group, cube, entity)
     );
   }
 
-  /** one device, its state and whatever settings it can take */
+  /**
+   * One device: whether the stretch acts on it at all, its state, and whatever
+   * settings it can take.
+   *
+   * "Not in this stretch" is a real third choice, not a shade of off. The
+   * stretch does not switch it, does not hold it, and does not retry it; it
+   * keeps whatever it had and any other schedule may drive it.
+   */
   private _deviceRow(
     entity: string,
-    action: Action,
-    own: boolean,
+    action: Action | undefined,
     onChange: (action: Action) => void,
     onClear: () => void
   ) {
-    const off = isOffAction(action);
     const domain = entity.split('.')[0];
-    const set = (changes: Partial<Action>) => onChange({ ...action, ...changes });
+    const untouched = !action;
+    const off = action ? isOffAction(action) : false;
+    const current = action || plainAction(entity, true);
+    const set = (changes: Partial<Action>) => onChange({ ...current, ...changes });
 
     return html`
-      <div class="device-row ${own ? 'own' : ''}">
+      <div class="device-row ${untouched ? 'untouched' : ''}">
         <span class="device-label">
-          <span class="device-dot ${off ? '' : 'on'}"></span>
+          <span class="device-dot ${untouched ? 'none' : off ? 'off' : 'on'}"></span>
           ${this.hass.states[entity]?.attributes.friendly_name || entity}
-          ${own
-        ? html`<button class="link" @click=${onClear}>
-              ${this._t('override.back')}
-            </button>`
-        : html`<em class="follows">${this._t('override.follows')}</em>`}
+          ${untouched
+        ? html`<em class="follows">${this._t('device.untouched_hint')}</em>`
+        : nothing}
         </span>
 
-        <div class="segmented">
-          <button class=${off ? '' : 'active'} @click=${() =>
+        <div class="segmented states">
+          <button class="on ${!untouched && !off ? 'active' : ''}" @click=${() =>
         set({ service: `${domain}.turn_on` })}>${this._t('state.on')}</button>
-          <button class=${off ? 'active' : ''} @click=${() =>
+          <button class="off ${!untouched && off ? 'active' : ''}" @click=${() =>
         set({ service: `${domain}.turn_off`, service_data: {} })}>${this._t('state.off')}</button>
+          <button class="none ${untouched ? 'active' : ''}" title=${this._t('device.untouched_hint')}
+            @click=${onClear}>${this._t('device.untouched')}</button>
         </div>
 
-        ${off ? nothing : this._renderDeviceParameters(domain, action, set)}
+        ${untouched || off ? nothing : this._renderDeviceParameters(domain, current, set)}
       </div>
     `;
   }
@@ -1799,26 +1894,27 @@ export class DialogSchedulerPlan extends LitElement {
 
   private _setDeviceAction(group: PlanGroup, cube: PlanCube, entity: string, action: Action) {
     this._updateCube(group.track, cube.id, {
-      overrides: { ...(cube.overrides || {}), [entity]: action },
+      devices: { ...(cube.devices || {}), [entity]: action },
     });
   }
 
+  /** take a device out of the stretch entirely */
   private _clearDeviceAction(group: PlanGroup, cube: PlanCube, entity: string) {
-    const overrides = { ...(cube.overrides || {}) };
-    delete overrides[entity];
-    this._updateCube(group.track, cube.id, {
-      overrides: Object.keys(overrides).length ? overrides : undefined,
-    });
+    const devices = { ...(cube.devices || {}) };
+    delete devices[entity];
+    this._updateCube(group.track, cube.id, { devices });
   }
 
-  /** kept for the keyboard: flip one device away from its group and back */
+  /** the keyboard's flip: on, off, and out of the stretch altogether */
   private _toggleOverride(group: PlanGroup, cube: PlanCube, entity: string) {
-    if (cube.overrides?.[entity]) {
-      this._clearDeviceAction(group, cube, entity);
+    const action = cubeActionFor(cube, entity);
+    if (!action) {
+      this._setDeviceAction(group, cube, entity, plainAction(entity, true));
       return;
     }
-    const opposite = invertOnOffAction(cubeActionFor(cube, entity));
+    const opposite = invertOnOffAction(action);
     if (opposite) this._setDeviceAction(group, cube, entity, opposite);
+    else this._clearDeviceAction(group, cube, entity);
   }
 
   /** brightness and warmth, for the devices that have them */
@@ -1902,6 +1998,36 @@ export class DialogSchedulerPlan extends LitElement {
           </button>
         </div>
         <span class="field-resolved">${this._t('enforce.hint')}</span>
+      </div>
+    `;
+  }
+
+  /** set every device of the stretch at once - a shortcut, not a state */
+  private _renderAllDevicesField(group: PlanGroup, cube: PlanCube) {
+    const setAll = (make: (entity: string) => Action | null) => {
+      const devices: Record<string, Action> = {};
+      group.entities.forEach(entity => {
+        const action = make(entity);
+        if (action) devices[entity] = action;
+      });
+      this._updateCube(group.track, cube.id, { devices });
+    };
+
+    return html`
+      <div class="field">
+        <span class="field-label">${this._t('device.all')}</span>
+        <div class="segmented states">
+          <button class="on" @click=${() => setAll(e => plainAction(e, true))}>
+            ${this._t('state.on')}
+          </button>
+          <button class="off" @click=${() => setAll(e => plainAction(e, false))}>
+            ${this._t('state.off')}
+          </button>
+          <button class="none" @click=${() => setAll(() => null)}>
+            ${this._t('device.untouched')}
+          </button>
+        </div>
+        <span class="field-resolved">${this._t('device.all_hint')}</span>
       </div>
     `;
   }
@@ -2170,7 +2296,6 @@ export class DialogSchedulerPlan extends LitElement {
       return this._deviceRow(
         entity,
         own || act(entry.on, entity),
-        Boolean(own),
         action => this._setMomentDevice(entry.id, entity, action),
         () => this._setMomentDevice(entry.id, entity, null)
       );
@@ -2244,8 +2369,7 @@ export class DialogSchedulerPlan extends LitElement {
   /** turn the answers into a plan and hand it to the editor */
   private _finishWizard() {
     const answers = this._wizard;
-    const domain = answers.entities[0]?.split('.')[0] || 'switch';
-    const act = (on: boolean) => ({ service: `${domain}.turn_${on ? 'on' : 'off'}`, service_data: {} });
+    const act = (on: boolean, entity: string) => plainAction(entity, on);
 
     // a moment is a boundary; the stretches are what lies between them
     const boundaries = [
@@ -2264,17 +2388,22 @@ export class DialogSchedulerPlan extends LitElement {
     ];
 
     const track = groupTrack(this._t('group.default'));
-    const cubes: PlanCube[] = boundaries.map((boundary, i) => ({
-      id: `${track}#${i}`,
-      name: boundary.name,
-      start: boundary.at,
-      stop: i + 1 < boundaries.length
-        ? boundaries[i + 1].at
-        : `${this._plan.endAnchor}+01:30:00`,
-      action: act(boundary.on),
-      overrides: boundary.overrides,
-      enforce: HOLDS_BY_DEFAULT,
-    }));
+    const cubes: PlanCube[] = boundaries.map((boundary, i) => {
+      const devices: Record<string, Action> = {};
+      answers.entities.forEach(entity => {
+        devices[entity] = boundary.overrides?.[entity] || act(boundary.on, entity);
+      });
+      return {
+        id: `${track}#${i}`,
+        name: boundary.name,
+        start: boundary.at,
+        stop: i + 1 < boundaries.length
+          ? boundaries[i + 1].at
+          : `${this._plan.endAnchor}+01:30:00`,
+        devices,
+        enforce: HOLDS_BY_DEFAULT,
+      };
+    });
 
     this._updatePlan({
       groups: [{ track, name: this._t('group.default'), entities: answers.entities, cubes }],
@@ -2463,6 +2592,48 @@ export class DialogSchedulerPlan extends LitElement {
         transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
       }
       .cube:hover { filter: brightness(1.06); }
+      /* plain on/off: unmistakable at a glance, not a matter of shade */
+      .cube.tone-on { background: linear-gradient(160deg, rgba(var(--plan-on), 0.95), rgba(var(--plan-on), 0.78)); }
+      .cube.tone-off { background: linear-gradient(160deg, rgba(var(--plan-off), 0.5), rgba(var(--plan-off), 0.34)); }
+      .cube.tone-mixed {
+        background: repeating-linear-gradient(
+          135deg,
+          rgba(var(--plan-on), 0.85) 0 10px,
+          rgba(var(--plan-off), 0.5) 10px 20px
+        );
+      }
+      .cube.tone-empty {
+        background: repeating-linear-gradient(
+          135deg,
+          rgba(var(--rgb-secondary-text-color, 114, 114, 114), 0.18) 0 6px,
+          transparent 6px 12px
+        );
+        color: var(--secondary-text-color);
+        border: 1px dashed var(--divider-color);
+      }
+      .segmented button.on.active { background: rgb(var(--plan-on)); }
+      .segmented button.off.active { background: rgba(var(--plan-off), 0.85); }
+      .segmented button.none.active {
+        background: repeating-linear-gradient(
+          135deg,
+          var(--divider-color) 0 5px,
+          transparent 5px 10px
+        );
+        color: var(--secondary-text-color);
+      }
+      .device-row.untouched { opacity: 0.62; border-style: dashed; }
+      .device-row.untouched .device-label { color: var(--secondary-text-color); }
+      .device-dot.none {
+        background: transparent;
+        border: 1px dashed var(--secondary-text-color);
+      }
+      .device-dot.off { background: rgba(var(--plan-off), 0.55); }
+      .report-device.untouched {
+        background: transparent;
+        border: 1px dashed var(--divider-color);
+        color: var(--secondary-text-color);
+      }
+
       .cube.on {
         background: linear-gradient(160deg, rgba(var(--plan-on), 0.95), rgba(var(--plan-on), 0.75));
       }

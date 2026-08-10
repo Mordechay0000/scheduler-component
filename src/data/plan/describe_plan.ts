@@ -7,10 +7,12 @@ import { resolveBoundary } from "./resolve_boundary";
 export type ReportDevice = {
   entity_id: string;
   name: string;
-  state: 'on' | 'off';
+  /** 'untouched' means the stretch does not act on this device at all */
+  state: 'on' | 'off' | 'untouched';
   brightness?: number;
   kelvin?: number;
-  /** whether this device follows its group here, or has its own state */
+  degrees?: number;
+  /** whether the stretch says anything about this device at all */
   own: boolean;
   /** an exception that takes this device over for part of the stretch */
   takenOverBy?: string;
@@ -38,7 +40,7 @@ const parameters = (action: Action) => {
   const brightness = data.brightness_pct ?? (
     data.brightness !== undefined ? Math.round((data.brightness / 255) * 100) : undefined
   );
-  return { brightness, kelvin: data.color_temp_kelvin };
+  return { brightness, kelvin: data.color_temp_kelvin, degrees: data.temperature };
 };
 
 /**
@@ -77,7 +79,16 @@ export const describePlan = (plan: Plan, hass: HomeAssistant): PlanReport => {
         holds: Boolean(cube.enforce),
         devices: group.entities.map(entity => {
           const action = cubeActionFor(cube, entity);
-          const { brightness, kelvin } = parameters(action);
+          if (!action) {
+            // not named by this stretch: kept as it was, not held, not retried
+            return {
+              entity_id: entity,
+              name: nameOf(entity),
+              state: 'untouched',
+              own: false,
+            } as ReportDevice;
+          }
+          const { brightness, kelvin, degrees } = parameters(action);
           const covering = plan.detaches.find(detach => {
             if (detach.entity != entity) return false;
             const start = at(detach.start);
@@ -88,7 +99,8 @@ export const describePlan = (plan: Plan, hass: HomeAssistant): PlanReport => {
             name: nameOf(entity),
             state: isOffAction(action) ? 'off' : 'on',
             ...(entity.split('.')[0] == 'light' ? { brightness, kelvin } : {}),
-            own: Boolean(cube.overrides?.[entity]),
+            ...(entity.split('.')[0] == 'climate' ? { degrees } : {}),
+            own: true,
             ...(covering ? { takenOverBy: covering.name } : {}),
           } as ReportDevice;
         }),
@@ -98,7 +110,7 @@ export const describePlan = (plan: Plan, hass: HomeAssistant): PlanReport => {
 
   plan.detaches.forEach(detach => {
     const action = detach.action;
-    const { brightness, kelvin } = parameters(action);
+    const { brightness, kelvin, degrees } = parameters(action);
     stretches.push({
       key: detach.track,
       group: nameOf(detach.entity),
@@ -111,6 +123,7 @@ export const describePlan = (plan: Plan, hass: HomeAssistant): PlanReport => {
         name: nameOf(detach.entity),
         state: isOffAction(action) ? 'off' : 'on',
         ...(detach.entity.split('.')[0] == 'light' ? { brightness, kelvin } : {}),
+        ...(detach.entity.split('.')[0] == 'climate' ? { degrees } : {}),
         own: true,
       }],
     });

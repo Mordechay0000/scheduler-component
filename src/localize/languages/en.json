@@ -464,6 +464,21 @@
             "media_player": "media player",
             "other": "something else"
           }
+        },
+        "device": {
+          "all": "All devices",
+          "all_hint": "A shortcut: sets every device of this group in this stretch. Each can still be changed on its own below.",
+          "untouched": "Not in this stretch",
+          "untouched_hint": "This stretch does not act on it: it keeps whatever it had, is not held to anything, is not retried, and any other schedule may drive it."
+        },
+        "settings": {
+          "open": "Settings",
+          "title": "Settings",
+          "hint": "Preferences, and the device book.",
+          "colours": "Colours",
+          "colours_plain": "Plain on / off",
+          "colours_action": "Follow the action",
+          "colours_hint": "Plain makes on and off unmistakable at a glance. Following the action tints a stretch with the colour the bulb will actually show."
         }
       }
     }

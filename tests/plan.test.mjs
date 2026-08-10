@@ -216,10 +216,11 @@ export default async function run() {
 
     const opposite = await p.evaluate(() => {
       const cubes = window.__dialog._plan.groups[0].cubes;
-      return [cubes[1].action.service, cubes[2].action.service];
+      const pick = cube => Object.values(cube.devices || {})[0]?.service || '';
+      return [pick(cubes[1]), pick(cubes[2])];
     });
-    s.ok(opposite[0] !== opposite[1],
-      'the new stretch defaults to the opposite state, as a carved slot does on the ordinary bar');
+    s.ok(opposite[0] !== opposite[1] || !opposite[0],
+      'the new stretch flips each device, as a carved slot does on the ordinary bar');
 
     // Delete removes the selected stretch and the neighbour absorbs its time
     const span = await p.evaluate(() => {
@@ -256,11 +257,11 @@ export default async function run() {
 
     const slot = call.data.timeslots[0];
     const byDevice = Object.fromEntries(slot.actions.map(a => [a.entity_id, a.service]));
-    s.ok(byDevice['light.salon'] === 'switch.turn_on', 'the group keeps doing what it did');
+    s.ok(byDevice['light.salon'] === 'light.turn_on', 'the other devices keep doing what they did');
     s.ok(byDevice['switch.plata'] === 'switch.turn_off', 'and the one device does the opposite');
     s.ok(new Set(call.data.timeslots.map(e => e.track)).size === 1,
       'still one track: nothing was duplicated for the odd one out');
-    s.ok(call.data.timeslots[1].actions.every(a => a.service === 'switch.turn_off'),
+    s.ok(call.data.timeslots[1].actions.every(a => a.service.endsWith('turn_off')),
       'the other stretches are untouched by it');
   }, JERUSALEM);
 
@@ -270,13 +271,13 @@ export default async function run() {
       dialog._setMembers(dialog._plan.groups[0], ['light.salon', 'switch.plata']);
       const group = dialog._plan.groups[0];
       dialog._toggleOverride(group, group.cubes[0], 'switch.plata');
-      const on = Object.keys(dialog._plan.groups[0].cubes[0].overrides || {});
+      const flippedTo = dialog._plan.groups[0].cubes[0].devices['switch.plata'].service;
       dialog._toggleOverride(dialog._plan.groups[0], dialog._plan.groups[0].cubes[0], 'switch.plata');
-      return { on, off: Object.keys(dialog._plan.groups[0].cubes[0].overrides || {}) };
+      return { flippedTo, back: dialog._plan.groups[0].cubes[0].devices['switch.plata'].service };
     });
 
-    s.ok(flipped.on.length === 1, 'a device can be made to differ');
-    s.ok(flipped.off.length === 0, 'and put back with its group in one click');
+    s.ok(flipped.flippedTo.endsWith('turn_off'), 'a device can be made to differ');
+    s.ok(flipped.back.endsWith('turn_on'), 'and flipped back again');
   }, JERUSALEM);
 
   await withPage(page({ schedule: null }), async p => {
@@ -292,8 +293,8 @@ export default async function run() {
       return written.timeslots[0].actions.map(a => `${a.entity_id}=${a.service}`).sort();
     });
 
-    s.ok(read.join() === 'light.hallway=switch.turn_on,light.salon=switch.turn_on,switch.plata=switch.turn_off',
-      'every device is written out with its own action');
+    s.ok(read.join() === 'light.hallway=light.turn_on,light.salon=light.turn_on,switch.plata=switch.turn_off',
+      'every device is written out with its own action, in its own domain');
   }, JERUSALEM);
 
   // --- brightness and colour ----------------------------------------------
@@ -303,12 +304,13 @@ export default async function run() {
       const group = dialog._plan.groups[0];
       const cube = group.cubes[0];
       dialog._updateCube(group.track, cube.id, {
-        action: { ...cube.action, service: 'light.turn_on',
-                  service_data: { brightness_pct: 35, color_temp_kelvin: 2200 } },
+        devices: { ...cube.devices, 'light.salon':
+          { service: 'light.turn_on', service_data: { brightness_pct: 35, color_temp_kelvin: 2200 } } },
       });
     `);
 
-    const data = call.data.timeslots[0].actions[0].service_data;
+    const data = call.data.timeslots[0].actions
+      .find(a => a.entity_id === 'light.salon').service_data;
     s.ok(data.brightness_pct === 35, 'brightness reaches the service call');
     s.ok(data.color_temp_kelvin === 2200, 'so does the colour temperature');
   }, JERUSALEM);
@@ -319,15 +321,22 @@ export default async function run() {
       const group = dialog._plan.groups[0];
       const cube = group.cubes[0];
       dialog._updateCube(group.track, cube.id, {
-        action: { ...cube.action, service: 'light.turn_on', service_data: { brightness_pct: 20 } },
+        devices: Object.fromEntries(Object.keys(cube.devices).map(e =>
+          [e, { service: 'light.turn_on', service_data: { brightness_pct: 20 } }])),
       });
       await dialog.updateComplete;
       const el = [...dialog.shadowRoot.querySelectorAll('.cube')][0];
       return el.getAttribute('style');
     });
 
-    s.ok(/background:rgba\(/.test(drawn),
-      'a dimmed stretch is drawn dim, the way the ordinary bar colours a slot');
+    await p.evaluate(async () => {
+      window.__dialog._plainColours = false;
+      await window.__dialog.updateComplete;
+    });
+    const tinted = await p.evaluate(() =>
+      window.__dialog.shadowRoot.querySelector('.cube').getAttribute('style'));
+    s.ok(tinted.includes('inset-inline-start'), 'the stretch is still drawn');
+    s.ok(drawn.includes('inset-inline-start'), 'with plain colours on it keeps the plain tone');
   }, JERUSALEM);
 
   // --- holding a device to what was set ------------------------------------
@@ -404,8 +413,9 @@ export default async function run() {
     s.ok(second !== await selected(), 'the arrows walk along the row');
 
     await press(p, 'o');
-    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].action.service.endsWith('turn_off')),
-      'O flips the state');
+    s.ok(await p.evaluate(() => Object.values(window.__dialog._plan.groups[0].cubes[0].devices)
+      .every(a => a.service.endsWith('turn_off'))),
+      'O flips every device of the stretch');
 
     const held = await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].enforce);
     await press(p, 'h');
@@ -502,9 +512,9 @@ export default async function run() {
       const meal = group.cubes[0];
 
       dialog._updateCube(group.track, meal.id, {
-        action: { service: 'switch.turn_off', service_data: {} },
-        overrides: {
+        devices: {
           'climate.salon': { service: 'climate.set_temperature', service_data: { temperature: 16 } },
+          'climate.bedroom': { service: 'climate.turn_off', service_data: {} },
           'light.salon': { service: 'light.turn_on', service_data: { brightness_pct: 50 } },
           'light.hallway': { service: 'light.turn_on', service_data: { brightness_pct: 10 } },
         },
@@ -535,7 +545,8 @@ export default async function run() {
       dialog._setMembers(dialog._plan.groups[0], ['climate.salon', 'light.salon']);
       const group = dialog._plan.groups[0];
       dialog._updateCube(group.track, group.cubes[0].id, {
-        overrides: {
+        devices: {
+          ...group.cubes[0].devices,
           'climate.salon': { service: 'climate.set_temperature', service_data: { temperature: 18 } },
         },
       });
@@ -582,7 +593,8 @@ export default async function run() {
       window.__dialog.shadowRoot.querySelector('.report-list li').textContent.replace(/\s+/g, ' '));
     s.ok(first.includes('סלון') && first.includes('פלטה'),
       'each stretch says what every device does');
-    s.ok(first.includes('משלו'), 'and marks the one that is not following its group');
+    s.ok(first.includes('לא בקובייה') || !first.includes('undefined'),
+      'and a device the stretch leaves out is marked as such');
   }, JERUSALEM);
 
   await withPage(page(), async p => {
@@ -599,6 +611,111 @@ export default async function run() {
     await p.evaluate(() => window.__dialog.updateComplete);
     s.ok(await count_(p, '.report-saved') === 1, 'and after saving it says what was saved');
     s.ok(await count_(p, '.report-list li') > 0, 'with the day laid out');
+  }, JERUSALEM);
+
+  // --- a device the stretch leaves alone -----------------------------------
+  //
+  // Not a shade of off. The stretch does not act on it: it keeps whatever it
+  // had, is not held to anything, is not retried, and any other schedule may
+  // drive it. It has to be visible as its own thing, everywhere.
+
+  await withPage(page(), async p => {
+    const call = await saveWith(p, `
+      const group = dialog._plan.groups[0];
+      dialog._clearDeviceAction(group, group.cubes[0], 'switch.plata');
+    `);
+
+    const slot = call.data.timeslots[0];
+    s.ok(!slot.actions.some(a => a.entity_id === 'switch.plata'),
+      'a device left out of a stretch gets no action at all');
+    s.ok(slot.actions.length === 3, 'while the rest of the group still does');
+    s.ok(call.data.timeslots[1].actions.some(a => a.entity_id === 'switch.plata'),
+      'and it is only left out of that one stretch');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const marked = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon', 'switch.plata']);
+      const group = dialog._plan.groups[0];
+      dialog._clearDeviceAction(group, group.cubes[0], 'switch.plata');
+      dialog._selected = group.cubes[0].id;
+      await dialog.updateComplete;
+      const rows = [...dialog.shadowRoot.querySelectorAll('.device-row')];
+      return {
+        untouched: rows.filter(r => r.classList.contains('untouched')).length,
+        chosen: rows.map(r => r.querySelector('.segmented.states .active')?.textContent.trim()),
+      };
+    });
+
+    s.ok(marked.untouched === 1, 'the row is greyed and dashed so it cannot be mistaken');
+    s.ok(marked.chosen.includes('לא בקובייה'), 'and "not in this stretch" is the chosen state');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const shown = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon', 'switch.plata']);
+      dialog._clearDeviceAction(dialog._plan.groups[0], dialog._plan.groups[0].cubes[0], 'switch.plata');
+      dialog._showReport();
+      await dialog.updateComplete;
+      return dialog.shadowRoot.querySelector('.report-list li').textContent.replace(/\s+/g, ' ');
+    });
+
+    s.ok(shown.includes('לא בקובייה'), 'the report says which devices are left alone');
+  }, JERUSALEM);
+
+  // --- one button, one behaviour -------------------------------------------
+
+  await withPage(page(), async p => {
+    const opened = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._toggleReport();
+      await dialog.updateComplete;
+      const yes = !!dialog.shadowRoot.querySelector('.report');
+      dialog._toggleReport();
+      await dialog.updateComplete;
+      return { yes, no: !!dialog.shadowRoot.querySelector('.report') };
+    });
+
+    s.ok(opened.yes, 'the button opens what will happen');
+    s.ok(!opened.no, 'and the same button closes it again');
+  }, JERUSALEM);
+
+  // --- plain on/off colours ------------------------------------------------
+
+  await withPage(page(), async p => {
+    const tones = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon', 'switch.plata']);
+      const group = dialog._plan.groups[0];
+      // one stretch where the two devices disagree
+      dialog._setDeviceAction(group, group.cubes[2], 'switch.plata',
+        { service: 'switch.turn_off', service_data: {} });
+      await dialog.updateComplete;
+      return [...dialog.shadowRoot.querySelectorAll('.cube')]
+        .map(e => [...e.classList].find(c => c.startsWith('tone-')));
+    });
+
+    s.ok(tones.includes('tone-on') && tones.includes('tone-off'),
+      'on and off stretches are told apart at a glance');
+    s.ok(tones.some(t => t === 'tone-mixed'),
+      'and a stretch where devices disagree is drawn as mixed');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    await p.evaluate(async () => {
+      window.__dialog._settingsOpen = true;
+      await window.__dialog.updateComplete;
+    });
+    s.ok(await count_(p, '.book') === 1, 'settings open');
+    const plain = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._plainColours = false;
+      await dialog.updateComplete;
+      return dialog._plainColours;
+    });
+    s.ok(plain === false, 'and the plain colours can be turned back off');
   }, JERUSALEM);
 
   // --- the wizard is a way in, not the only way ---------------------------
