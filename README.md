@@ -114,11 +114,14 @@ It rests on three things the engine can do that a plain schedule does not need:
   leaves that device alone, including across a restart; when it ends, the group
   takes the device back.
 
-Inside a stretch, individual devices can differ without the timeline being
-copied for them: the group's lights on while its hotplate stays off, in the very
-same stretch. That is an **override** — the device stays in the group and
-follows it everywhere else. Reach for an **exception** only when a device needs
-its own *hours*, not just its own state.
+**Every device in a stretch has its own state and its own settings.** This is
+the point of the whole thing: a house on a small generator cannot run the salon
+air conditioner and the bedroom ones at once, so during the meal the salon is on
+at 16° and the bedrooms are off, and later it is the other way round — one
+stretch, one row, not two plans. One light at 50% while another is at 10%, in
+the same stretch. A device with nothing set of its own simply follows the
+stretch. Reach for an **exception** only when a device needs its own *hours*,
+not just its own state.
 
 Lights can also be given a **brightness** and a **colour temperature** (warm
 through daylight), per stretch or per override; the stretch is then drawn in the
