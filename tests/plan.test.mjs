@@ -689,6 +689,73 @@ export default async function run() {
     s.ok(await count(p, '.band') === 1, 'leaving the guided path lands back in the editor');
   }, JERUSALEM);
 
+  // --- the wizard sets each device, moment by moment -----------------------
+
+  await withPage(page(), async p => {
+    const call = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizard = {
+        entities: ['climate.salon', 'climate.bedroom', 'light.salon'],
+        onAtCandleLighting: false,
+        moments: [
+          { id: 'meal', name: 'סעודה', when: 'eve', time: '20:00', on: false },
+          { id: 'night', name: 'שינה', when: 'eve', time: '23:00', on: false },
+        ],
+      };
+      dialog._wizardStep = 3;
+      await dialog.updateComplete;
+
+      // during the meal: the salon air conditioner and a dim light; the bedroom off
+      dialog._setMomentDevice('meal', 'climate.salon',
+        { service: 'climate.set_temperature', service_data: { temperature: 16 } });
+      dialog._setMomentDevice('meal', 'light.salon',
+        { service: 'light.turn_on', service_data: { brightness_pct: 40 } });
+      // afterwards the other way round
+      dialog._setMomentDevice('night', 'climate.bedroom',
+        { service: 'climate.set_temperature', service_data: { temperature: 24 } });
+
+      await dialog.updateComplete;
+      dialog._finishWizard();
+      await dialog.updateComplete;
+      await dialog._save();
+      return (window.__apiCalls || []).slice(-1)[0];
+    });
+
+    const slots = call.data.timeslots;
+    const at = name => Object.fromEntries(
+      slots.find(x => x.name === name).actions.map(a => [a.entity_id, a]));
+
+    s.ok(at('סעודה')['climate.salon'].service_data.temperature === 16,
+      'the wizard carries a per-device temperature through');
+    s.ok(at('סעודה')['climate.bedroom'].service.endsWith('turn_off'),
+      'while another device in the same moment stays off');
+    s.ok(at('סעודה')['light.salon'].service_data.brightness_pct === 40,
+      'and a brightness alongside it');
+    s.ok(at('שינה')['climate.bedroom'].service_data.temperature === 24
+      && at('שינה')['climate.salon'].service.endsWith('turn_off'),
+      'and the next moment is the other way round, as the generator needs');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const rows = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizard = {
+        entities: ['climate.salon', 'light.salon'],
+        onAtCandleLighting: true,
+        moments: [{ id: 'meal', name: 'סעודה', when: 'eve', time: '20:00', on: true }],
+      };
+      dialog._wizardStep = 3;
+      await dialog.updateComplete;
+      return {
+        moments: dialog.shadowRoot.querySelectorAll('.wizard-moment').length,
+        devices: dialog.shadowRoot.querySelectorAll('.wizard-moment .device-row').length,
+      };
+    });
+
+    s.ok(rows.moments === 2, 'the opening and every moment are laid out');
+    s.ok(rows.devices === 4, 'each with a row per device');
+  }, JERUSALEM);
+
   await withPage(page({ schedule: null }), async p => {
     await p.evaluate(async () => {
       window.__dialog._help = true;

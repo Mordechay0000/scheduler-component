@@ -97,11 +97,14 @@ type WizardMoment = {
   /** a clock time for 'eve' and 'day'; a duration for 'before_end' */
   time: string;
   on: boolean;
+  /** what individual devices do from this moment, when they differ */
+  overrides?: Record<string, Action>;
 };
 
 type WizardAnswers = {
   entities: string[];
   onAtCandleLighting: boolean;
+  openingOverrides?: Record<string, Action>;
   moments: WizardMoment[];
 };
 
@@ -1520,15 +1523,26 @@ export class DialogSchedulerPlan extends LitElement {
   }
 
   private _renderDeviceRow(group: PlanGroup, cube: PlanCube, entity: string) {
-    const own = cube.overrides?.[entity];
-    const action = cubeActionFor(cube, entity);
+    return this._deviceRow(
+      entity,
+      cubeActionFor(cube, entity),
+      Boolean(cube.overrides?.[entity]),
+      action => this._setDeviceAction(group, cube, entity, action),
+      () => this._clearDeviceAction(group, cube, entity)
+    );
+  }
+
+  /** one device, its state and whatever settings it can take */
+  private _deviceRow(
+    entity: string,
+    action: Action,
+    own: boolean,
+    onChange: (action: Action) => void,
+    onClear: () => void
+  ) {
     const off = isOffAction(action);
     const domain = entity.split('.')[0];
-
-    const set = (changes: Partial<Action>) => this._setDeviceAction(group, cube, entity, {
-      ...action,
-      ...changes,
-    });
+    const set = (changes: Partial<Action>) => onChange({ ...action, ...changes });
 
     return html`
       <div class="device-row ${own ? 'own' : ''}">
@@ -1536,7 +1550,7 @@ export class DialogSchedulerPlan extends LitElement {
           <span class="device-dot ${off ? '' : 'on'}"></span>
           ${this.hass.states[entity]?.attributes.friendly_name || entity}
           ${own
-        ? html`<button class="link" @click=${() => this._clearDeviceAction(group, cube, entity)}>
+        ? html`<button class="link" @click=${onClear}>
               ${this._t('override.back')}
             </button>`
         : html`<em class="follows">${this._t('override.follows')}</em>`}
@@ -1767,7 +1781,7 @@ export class DialogSchedulerPlan extends LitElement {
   // never replaces the editor: it builds a plan and hands it straight over.
 
   private get _wizardSteps() {
-    return ['intro', 'devices', 'candle', 'moments', 'review'];
+    return ['intro', 'devices', 'moments', 'settings', 'review'];
   }
 
   /** where a moment sits, written the way the engine stores it */
@@ -1854,19 +1868,9 @@ export class DialogSchedulerPlan extends LitElement {
           @value-changed=${(ev: CustomEvent) => { this._wizard = { ...this._wizard, entities: ev.detail.value }; }}
         ></scheduler-entity-picker>` : nothing}
 
-        ${step == 'candle' ? html`
-        <div class="segmented big">
-          <button
-            class=${this._wizard.onAtCandleLighting ? 'active' : ''}
-            @click=${() => { this._wizard = { ...this._wizard, onAtCandleLighting: true }; }}
-          >${this._t('state.on')}</button>
-          <button
-            class=${this._wizard.onAtCandleLighting ? '' : 'active'}
-            @click=${() => { this._wizard = { ...this._wizard, onAtCandleLighting: false }; }}
-          >${this._t('state.off')}</button>
-        </div>` : nothing}
 
         ${step == 'moments' ? this._renderWizardMoments() : nothing}
+        ${step == 'settings' ? this._renderWizardSettings() : nothing}
         ${step == 'review' ? this._renderWizardReview() : nothing}
 
         <div class="wizard-buttons">
@@ -1958,6 +1962,94 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
+  /**
+   * Moment by moment, what each device does.
+   *
+   * This is where a plan stops being "everything on" and becomes usable: the
+   * salon air conditioner during the meal, the bedrooms afterwards, one light
+   * bright and another dim. A device left alone simply does whatever the
+   * moment does.
+   */
+  private _renderWizardSettings() {
+    const moments = this._wizardTimeline().inside;
+    const domainOf = (entity: string) => entity.split('.')[0];
+    const act = (on: boolean, entity: string) => ({
+      service: `${domainOf(entity)}.turn_${on ? 'on' : 'off'}`,
+      service_data: {},
+    });
+
+    const opening = {
+      id: '',
+      name: this._t('cube.welcome'),
+      on: this._wizard.onAtCandleLighting,
+      overrides: this._wizard.openingOverrides,
+      at: `${this._plan.startAnchor}+00:00:00`,
+    };
+    const entries = [
+      opening,
+      ...moments.map(entry => ({
+        id: entry.moment.id,
+        name: entry.moment.name || this._t('cube.unnamed'),
+        on: entry.moment.on,
+        overrides: entry.moment.overrides,
+        at: entry.boundary,
+      })),
+    ];
+
+    return html`
+      <div class="wizard-settings">
+        ${entries.map(entry => html`
+        <div class="wizard-moment">
+          <div class="wizard-moment-head">
+            <span class="review-name">${entry.name}</span>
+            <span class="review-at">${this._formatMoment(entry.at)}</span>
+            <div class="segmented">
+              <button class=${entry.on ? 'active' : ''}
+                @click=${() => this._setMomentDefault(entry.id, true)}>${this._t('state.on')}</button>
+              <button class=${entry.on ? '' : 'active'}
+                @click=${() => this._setMomentDefault(entry.id, false)}>${this._t('state.off')}</button>
+            </div>
+          </div>
+          <div class="device-rows">
+            ${this._wizard.entities.map(entity => {
+      const own = entry.overrides?.[entity];
+      return this._deviceRow(
+        entity,
+        own || act(entry.on, entity),
+        Boolean(own),
+        action => this._setMomentDevice(entry.id, entity, action),
+        () => this._setMomentDevice(entry.id, entity, null)
+      );
+    })}
+          </div>
+        </div>`)}
+      </div>
+    `;
+  }
+
+  private _setMomentDefault(id: string, on: boolean) {
+    if (!id) {
+      this._wizard = { ...this._wizard, onAtCandleLighting: on };
+      return;
+    }
+    this._updateMoment(id, { on });
+  }
+
+  private _setMomentDevice(id: string, entity: string, action: Action | null) {
+    const apply = (overrides?: Record<string, Action>) => {
+      const next = { ...(overrides || {}) };
+      if (action) next[entity] = action;
+      else delete next[entity];
+      return Object.keys(next).length ? next : undefined;
+    };
+    if (!id) {
+      this._wizard = { ...this._wizard, openingOverrides: apply(this._wizard.openingOverrides) };
+      return;
+    }
+    const moment = this._wizard.moments.find(m => m.id == id);
+    this._updateMoment(id, { overrides: apply(moment?.overrides) });
+  }
+
   /** the day read back as a list, so it can be checked before it is built */
   private _renderWizardReview() {
     const { inside, outside } = this._wizardTimeline();
@@ -2007,11 +2099,13 @@ export class DialogSchedulerPlan extends LitElement {
         at: `${this._plan.startAnchor}+00:00:00`,
         on: answers.onAtCandleLighting,
         name: this._t('cube.welcome'),
+        overrides: answers.openingOverrides,
       },
       ...this._wizardTimeline().inside.map(entry => ({
         at: entry.boundary,
         on: entry.moment.on,
         name: entry.moment.name || this._t('cube.unnamed'),
+        overrides: entry.moment.overrides,
       })),
     ];
 
@@ -2024,6 +2118,7 @@ export class DialogSchedulerPlan extends LitElement {
         ? boundaries[i + 1].at
         : `${this._plan.endAnchor}+01:30:00`,
       action: act(boundary.on),
+      overrides: boundary.overrides,
       enforce: HOLDS_BY_DEFAULT,
     }));
 
@@ -2656,6 +2751,29 @@ export class DialogSchedulerPlan extends LitElement {
         max-width: 640px;
         margin-inline: auto;
       }
+      .wizard-settings {
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        max-height: 46vh;
+        overflow-y: auto;
+      }
+      .wizard-moment {
+        border: 1px solid var(--divider-color);
+        border-radius: 10px;
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .wizard-moment-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .wizard-moment-head .review-name { flex: 1; }
       .wizard-progress { display: flex; gap: 6px; }
       .dot {
         width: 28px;

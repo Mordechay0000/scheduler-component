@@ -367,15 +367,12 @@
             "title": "Which devices?",
             "body": "Pick the lights and switches that should follow this plan. You can add more later, and any one of them can be given its own hours afterwards."
           },
-          "candle": {
-            "title": "At candle lighting",
-            "body": "When Shabbat comes in, should these devices be on or off? The exact time is read from the Jewish Calendar every week, so it follows the season on its own."
-          },
+          "candle": {},
           "night": {},
           "morning": {},
           "moments": {
             "title": "Build your Shabbat",
-            "body": "Add the moments your day is made of - dinner, bedtime, morning, lunch, a nap. Each one says what happens from then until the next. Start from a suggestion or add your own.",
+            "body": "Add the moments your day is made of — dinner, bedtime, morning, lunch, a nap. Each one runs until the next. Start from a suggestion or add your own; what the devices do is the next step.",
             "add": "Add a moment",
             "name": "Name it",
             "empty": "No moments yet - the devices will simply hold their opening state until Shabbat goes out."
@@ -397,6 +394,10 @@
             "title": "This is your Shabbat",
             "body": "Read it through. Anything here can still be changed in the editor afterwards.",
             "outside": "{names} falls outside the band and was left out. Shabbat evening times must be after candle lighting, and Shabbat day times before havdalah."
+          },
+          "settings": {
+            "title": "What each device does",
+            "body": "Moment by moment. Set the moment as a whole with the on/off above it, then change any device that should differ — the salon air conditioner during the meal while the bedrooms stay off, one light bright and another dim."
           }
         },
         "override": {
