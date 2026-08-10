@@ -442,14 +442,16 @@
             "outside": "This lands at {time}, outside Shabbat — the stretch would never run.",
             "tight": "{time} is close to the edge of the band. On another Shabbat it can fall outside it.",
             "hard": "{time} is a fixed clock time: it does not move with the sun, so it can land differently another week.",
-            "unknown": "This time cannot be worked out yet."
+            "unknown": "This time cannot be worked out yet.",
+            "estimate": "This works out to about {time}. The exact sunset is read on the day, so it can land a few minutes either side of that."
           },
           "problem": {
             "no_time": "\"{name}\" has no time yet.",
             "outside": "\"{name}\" lands at {time}, outside this Shabbat. Move it inside the band, or measure it from sunset or from havdalah instead of the clock.",
             "collide": "{names} land on the same minute. Two moments at the same time would leave nothing in between them — move one.",
             "hard": "{names} use a fixed clock time. It works this Shabbat, but candle lighting and havdalah move by more than an hour across the year, so on another Shabbat the same reading can fall outside the band. Nothing breaks when that happens: the stretch simply does not run, and the one before it carries on, with the same devices in the same state, until the next boundary that does land. Measuring from sunset or from havdalah avoids it entirely.",
-            "tight": "\"{name}\" is only {hours} hours from the edge of the band. It works tonight, but it is the first one that will fall outside on a Shabbat that comes in later."
+            "tight": "\"{name}\" is only {hours} hours from the edge of the band. It works tonight, but it is the first one that will fall outside on a Shabbat that comes in later.",
+            "unknown": "\"{name}\" cannot be placed yet - whatever publishes its time has not said anything. The boundary itself is fine; it will be worked out when the plan runs."
           }
         },
         "override": {

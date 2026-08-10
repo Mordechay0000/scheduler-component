@@ -1016,6 +1016,52 @@ export default async function run() {
     s.ok(moved.untouched, 'and the boundary before it is left where it was');
   }, JERUSALEM);
 
+  // --- the sun is drawn onto the band, not wherever it happens to be next --
+
+  await withPage(page(), async p => {
+    const drawn = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      // `sun.sun` publishes the NEXT sunset, which on a Thursday is Thursday's:
+      // days away from a band that opens on Friday evening
+      dialog.hass = {
+        ...dialog.hass,
+        states: {
+          ...dialog.hass.states,
+          'sun.sun': { entity_id: 'sun.sun', state: 'above_horizon',
+            attributes: { next_setting: '2026-08-13T19:31:00+03:00' } },
+        },
+      };
+      dialog._wizardStep = 3;
+      dialog._wizard = {
+        entities: ['light.salon'],
+        onAtCandleLighting: true,
+        moments: [{ id: 'a', name: 'סעודה', when: 'sunset', time: '01:30', before: false, on: true }],
+      };
+      await dialog.updateComplete;
+
+      const at = dialog._moment(dialog._momentBoundary(dialog._wizard.moments[0]));
+      const problems = dialog._wizardProblems();
+      dialog._finishWizard();
+      await dialog.updateComplete;
+
+      return {
+        boundary: dialog._momentBoundary({ when: 'sunset', time: '01:30', before: false }),
+        day: at && at.getDate(),
+        hour: at && at.getHours(),
+        blocking: problems.blocking.length,
+        cubes: dialog._plan.groups[0].cubes.map(c => c.name),
+      };
+    });
+
+    s.ok(drawn.boundary === 'sunset+01:30:00',
+      'what gets saved is the sun itself, read again on the day the stretch runs');
+    s.ok(drawn.day === 14 && drawn.hour === 21,
+      'while the drawing puts it on the band\'s own evening rather than three days earlier');
+    s.ok(drawn.blocking === 0, 'and an estimate never blocks the wizard');
+    s.ok(drawn.cubes.includes('סעודה'),
+      'nor is a moment measured from the sun quietly dropped out of the plan');
+  }, JERUSALEM);
+
   // --- checked while it is being built, not after --------------------------
 
   await withPage(page(), async p => {

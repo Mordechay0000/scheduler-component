@@ -537,8 +537,42 @@ export class DialogSchedulerPlan extends LitElement {
     return resolveBoundary(`${this._plan.endAnchor}+01:30:00`, this.hass);
   }
 
+  /**
+   * Where a boundary falls, on the band this editor is drawing.
+   *
+   * Everything anchored to candle lighting or havdalah lands exactly, because
+   * those entities publish the very timestamps the engine will read. Sunset is
+   * the awkward one: `sun.sun` publishes the *next* sunset, which on a Thursday
+   * afternoon is Thursday's, nowhere near the band. The engine has no such
+   * problem - it reads the sun again on the day the stretch runs - so the
+   * stored boundary is exact and only the drawing needs help.
+   *
+   * So a sun boundary is drawn from the time of day it works out to, placed on
+   * the band's own days. Sunset shifts about a minute a day, so within a week
+   * of the band that is right to within a few minutes; it is an estimate for
+   * the picture, never for what gets saved.
+   */
   private _moment(value: string) {
-    return resolveBoundary(value, this.hass, this._bandStart || undefined);
+    const resolved = resolveBoundary(value, this.hass, this._bandStart || undefined);
+    if (!resolved) return resolved;
+    const parsed = parseTimeString(value);
+    if (parsed.mode != TimeMode.Sunset && parsed.mode != TimeMode.Sunrise) return resolved;
+    return this._onBandDay(resolved.getHours(), resolved.getMinutes()) || resolved;
+  }
+
+  /**
+   * A time of day, put on whichever of the band's two days it belongs to.
+   *
+   * Before the small hours it is still the evening the band opened on;
+   * afterwards it belongs to the day it closes - the same rule the wizard uses
+   * when somebody types a clock time.
+   */
+  private _onBandDay(hours: number, minutes: number) {
+    const anchor = hours >= 16 ? this._bandStart : this._bandEnd;
+    if (!anchor) return null;
+    const out = new Date(anchor);
+    out.setHours(hours, minutes, 0, 0);
+    return out;
   }
 
   private _position(value: string) {
@@ -2338,7 +2372,14 @@ export class DialogSchedulerPlan extends LitElement {
     if (!at || !start || !end) return this._t('wizard.caution.unknown');
 
     if (at <= start || at >= end) {
-      return this._t('wizard.caution.outside', '{time}', this._formatMoment(this._momentBoundary(moment)));
+      const shown = this._formatMoment(this._momentBoundary(moment));
+      // the sun is drawn from an estimate of the day's sunset, so a sun
+      // boundary near an edge is worth a word rather than a verdict
+      return this._t(
+        moment.when == 'sunset' ? 'wizard.caution.estimate' : 'wizard.caution.outside',
+        '{time}',
+        shown
+      );
     }
     if (moment.when != 'clock') return null;
 
@@ -2384,17 +2425,26 @@ export class DialogSchedulerPlan extends LitElement {
     }));
 
     placed.forEach(({ moment, boundary, at }) => {
-      if (!at) {
+      if (!/^\d{1,2}:\d{2}$/.test(moment.time || '')) {
         blocking.push(this._t('wizard.problem.no_time', '{name}', named(moment)));
         return;
       }
-      if (start && end && (at <= start || at >= end)) {
-        blocking.push(this._t(
-          'wizard.problem.outside',
-          ['{name}', '{time}'],
-          [named(moment), this._formatMoment(boundary)]
-        ));
+      if (!at) {
+        // the anchor has not published anything yet; the boundary itself is
+        // fine, so this is worth saying and not worth stopping for
+        warnings.push(this._t('wizard.problem.unknown', '{name}', named(moment)));
+        return;
       }
+      if (!start || !end || (at > start && at < end)) return;
+      const message = this._t(
+        'wizard.problem.outside',
+        ['{name}', '{time}'],
+        [named(moment), this._formatMoment(boundary)]
+      );
+      // a sun boundary is only drawn from an estimate of the day's sunset, so
+      // it is worth saying and not solid enough to stop on
+      if (moment.when == 'sunset') warnings.push(message);
+      else blocking.push(message);
     });
 
     // two moments on the same minute would leave nothing in between them
@@ -2450,7 +2500,11 @@ export class DialogSchedulerPlan extends LitElement {
     const placed = this._wizard.moments.map(moment => {
       const boundary = this._momentBoundary(moment);
       const at = this._moment(boundary);
-      const inside = !!(at && start && end && at > start && at < end);
+      const within = !!(at && start && end && at > start && at < end);
+      // a sun boundary is placed here from an estimate; the engine reads the
+      // real sunset on the day, so one sitting on an edge is kept rather than
+      // quietly dropped out of the plan
+      const inside = within || !!(at && moment.when == 'sunset');
       return { moment, boundary, at, inside };
     });
     const inside = placed
@@ -2759,10 +2813,11 @@ export class DialogSchedulerPlan extends LitElement {
     const at = this._moment(this._momentBoundary(moment));
     const caution = this._momentCaution(moment);
     const outside = !!(at && this._bandStart && this._bandEnd
-      && (at <= this._bandStart || at >= this._bandEnd));
+      && (at <= this._bandStart || at >= this._bandEnd)
+      && moment.when != 'sunset');
 
     return html`
-      <div class="moment ${!at || outside ? 'wrong' : ''}">
+      <div class="moment ${outside ? 'wrong' : ''}">
         <input
           class="moment-name"
           .value=${moment.name}
