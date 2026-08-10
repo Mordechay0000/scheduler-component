@@ -661,3 +661,115 @@ def test_brightness_is_not_sent_to_something_that_is_not_a_light():
 
     assert by_device["light.salon"] == {"brightness_pct": 60}
     assert by_device["switch.boiler"] == {}
+
+
+# --- several device states in one stretch -----------------------------------
+#
+# The reason the whole thing exists: a house on a small generator cannot run
+# the salon air conditioner and the bedroom ones at the same time. During the
+# meal one is on and the others are off; later it is the other way round. That
+# has to be one stretch, not two plans.
+
+
+def generator_plan():
+    return plan_from_dict({
+        "name": "Shabbat",
+        "groups": [{
+            "name": "home",
+            "devices": ["climate.salon", "climate.bedroom", "light.salon", "light.hallway"],
+            "cubes": [
+                {
+                    "name": "the meal",
+                    "from": "candle_lighting@20:00", "to": "candle_lighting@22:30",
+                    "state": "off",
+                    "overrides": [
+                        {"device": "climate.salon", "state": "on", "degrees": 16},
+                        {"device": "light.salon", "state": "on", "brightness": 50},
+                        {"device": "light.hallway", "state": "on", "brightness": 10},
+                    ],
+                },
+                {
+                    "name": "night",
+                    "from": "candle_lighting@22:30", "to": "havdalah@06:30",
+                    "state": "off",
+                    "overrides": [{"device": "climate.bedroom", "state": "on", "degrees": 24}],
+                },
+            ],
+        }],
+    })
+
+
+def test_one_stretch_holds_a_different_state_for_every_device():
+    slots = plan_to_payload(generator_plan())["timeslots"]
+    meal = {a["entity_id"]: a for a in slots[0]["actions"]}
+
+    assert len(slots) == 2  # two stretches, not two plans
+    assert meal["climate.salon"]["service"] == "climate.set_temperature"
+    assert meal["climate.salon"]["service_data"]["temperature"] == 16
+    assert meal["climate.bedroom"]["service"] == "climate.turn_off"
+    assert meal["light.salon"]["service_data"]["brightness_pct"] == 50
+    assert meal["light.hallway"]["service_data"]["brightness_pct"] == 10
+
+
+def test_the_other_way_round_later_in_the_night():
+    slots = plan_to_payload(generator_plan())["timeslots"]
+    night = {a["entity_id"]: a for a in slots[1]["actions"]}
+
+    assert night["climate.bedroom"]["service_data"]["temperature"] == 24
+    assert night["climate.salon"]["service"] == "climate.turn_off"
+
+
+def test_it_is_still_one_track_and_one_row():
+    payload = plan_to_payload(generator_plan())
+    assert len({s["track"] for s in payload["timeslots"]}) == 1
+
+
+def test_every_device_state_survives_a_round_trip():
+    payload = plan_to_payload(generator_plan())
+    read = plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]})
+    meal = read.groups[0].cubes[0]
+
+    assert meal.overrides["climate.salon"].degrees == 16
+    assert meal.overrides["light.salon"].brightness == 50
+    assert meal.overrides["light.hallway"].brightness == 10
+
+
+def test_a_setting_is_never_sent_to_something_that_cannot_take_it():
+    """One stretch carries brightness for its lights and degrees for its air
+    conditioner; neither is told the other's business."""
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{
+            "name": "home", "devices": ["light.salon", "climate.salon", "switch.boiler"],
+            "cubes": [{"name": "n", "from": "candle_lighting", "to": "havdalah",
+                       "state": "on", "brightness": 60, "degrees": 22}],
+        }],
+    })
+    by_device = {a["entity_id"]: a for a in plan_to_payload(plan)["timeslots"][0]["actions"]}
+
+    assert by_device["light.salon"]["service_data"] == {"brightness_pct": 60}
+    assert by_device["climate.salon"]["service_data"] == {"temperature": 22}
+    assert by_device["switch.boiler"]["service_data"] == {}
+
+
+def test_the_report_shows_each_device_with_its_own_setting():
+    from scheduler.plan_model import describe_plan
+
+    devices = describe_plan(generator_plan())["groups"][0]["stretches"][0]["devices"]
+    by_device = {d["device"]: d for d in devices}
+
+    assert by_device["climate.salon"]["degrees"] == 16
+    assert by_device["climate.bedroom"]["state"] == "off"
+    assert by_device["light.hallway"]["brightness"] == 10
+
+
+@pytest.mark.parametrize("degrees", [0, 60])
+def test_a_temperature_out_of_range_is_told_the_range(degrees):
+    with pytest.raises(PlanError) as err:
+        plan_to_payload(plan_from_dict({
+            "name": "x",
+            "groups": [{"name": "home", "devices": ["climate.a"], "cubes": [
+                {"name": "n", "from": "candle_lighting", "to": "havdalah",
+                 "state": "on", "degrees": degrees}]}],
+        }))
+    assert "5 to 35" in str(err.value)

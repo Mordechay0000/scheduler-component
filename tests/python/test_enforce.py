@@ -285,3 +285,66 @@ def test_a_slot_does_not_enforce_unless_it_is_asked_to():
         {const.ATTR_START: "07:00:00", const.ATTR_ACTIONS: [{"service": "switch.turn_on"}]}
     )
     assert result[const.ATTR_ENFORCE] is False
+
+
+# --- settings are part of the state -----------------------------------------
+#
+# A device is not "correct" merely because it is on. An air conditioner nudged
+# from 16 to 24 degrees, or a light dimmed from 80 to 25 percent, has been
+# moved just as surely as one that was switched off - and holding a state has
+# to mean holding what was set, not only whether it is running.
+
+
+def test_an_air_conditioner_moved_off_its_temperature_does_not_match(hass, states):
+    states.set("climate.salon", "cool", {"temperature": 24})
+
+    assert state_matches_action(
+        hass, action("climate.salon", "climate.set_temperature", temperature=16)
+    ) is False
+    states.set("climate.salon", "cool", {"temperature": 16})
+    assert state_matches_action(
+        hass, action("climate.salon", "climate.set_temperature", temperature=16)
+    ) is True
+
+
+async def test_a_temperature_that_was_changed_is_put_back(hass, states, calls):
+    states.set("climate.salon", "cool", {"temperature": 24})
+    queue = make_queue(
+        hass, actions=[action("climate.salon", "climate.set_temperature", temperature=16)]
+    )
+
+    await enforce(queue, "climate.salon")
+
+    from homeassistant.const import CONF_SERVICE_DATA
+    assert calls[0][CONF_SERVICE_DATA]["temperature"] == 16
+
+
+async def test_a_light_dimmed_by_somebody_is_put_back(hass, states, calls):
+    states.set("light.salon", "on", {"brightness": 64})  # about 25%
+    queue = make_queue(
+        hass, actions=[action("light.salon", "light.turn_on", brightness_pct=80)]
+    )
+
+    await enforce(queue, "light.salon")
+
+    assert calls, "a light left at the wrong brightness is still the wrong state"
+
+
+async def test_a_colour_that_drifted_is_put_back(hass, states, calls):
+    states.set("light.salon", "on", {"color_temp_kelvin": 5000})
+    queue = make_queue(
+        hass, actions=[action("light.salon", "light.turn_on", color_temp_kelvin=2700)]
+    )
+
+    await enforce(queue, "light.salon")
+
+    assert calls
+
+
+def test_a_device_at_its_settings_is_left_alone(hass, states):
+    states.set("light.salon", "on", {"brightness": 204, "color_temp_kelvin": 2700})
+
+    assert state_matches_action(
+        hass,
+        action("light.salon", "light.turn_on", brightness_pct=80, color_temp_kelvin=2700),
+    ) is True

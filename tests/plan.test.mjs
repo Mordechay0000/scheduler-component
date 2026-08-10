@@ -22,6 +22,8 @@ const page = ({ anchors = true, schedule = null } = {}) => buildPage({
       'light.hallway': { entity_id: 'light.hallway', state: 'on', attributes: { friendly_name: 'מסדרון' } },
       'switch.boiler': { entity_id: 'switch.boiler', state: 'off', attributes: { friendly_name: 'דוד' } },
       'switch.plata': { entity_id: 'switch.plata', state: 'off', attributes: { friendly_name: 'פלטה' } },
+      'climate.salon': { entity_id: 'climate.salon', state: 'off', attributes: { friendly_name: 'מזגן סלון' } },
+      'climate.bedroom': { entity_id: 'climate.bedroom', state: 'off', attributes: { friendly_name: 'מזגן חדר' } },
       ...(${anchors} ? {
         '${CANDLE}': { entity_id: '${CANDLE}', state: '2026-08-14T19:29:00+03:00', attributes: { friendly_name: 'הדלקת נרות' } },
         '${HAVDALAH}': { entity_id: '${HAVDALAH}', state: '2026-08-15T20:12:00+03:00', attributes: { friendly_name: 'צאת שבת' } },
@@ -439,19 +441,107 @@ export default async function run() {
   }, JERUSALEM);
 
   await withPage(page(), async p => {
-    const absorbed = await p.evaluate(async () => {
+    const pushed = await p.evaluate(async () => {
       const dialog = window.__dialog;
       const group = dialog._plan.groups[0];
       const before = group.cubes.length;
-      // pull a boundary right over the next stretch's far end
+      const wasAt = dialog._moment(group.cubes[2].start).getTime();
+      // drag a boundary well into the next stretch
       const target = new Date(dialog._moment(group.cubes[1].stop));
-      target.setMinutes(target.getMinutes() + 5);
+      target.setMinutes(target.getMinutes() + 60);
       dialog._moveBoundary(group.track, 1, dialog._boundaryFromDate(target));
       await dialog.updateComplete;
-      return { before, after: dialog._plan.groups[0].cubes.length };
+      const after = dialog._plan.groups[0];
+      return {
+        before,
+        count: after.cubes.length,
+        movedTo: dialog._moment(after.cubes[2].start)?.getTime(),
+        wasAt,
+      };
     });
-    s.ok(absorbed.after < absorbed.before,
-      'a stretch dragged over is absorbed rather than left with no length');
+
+    s.ok(pushed.count === pushed.before,
+      'a stretch pushed into is shortened, not swallowed');
+    s.ok(pushed.movedTo > pushed.wasAt,
+      'and the boundary beyond it is pushed along to make room');
+  }, JERUSALEM);
+
+  // --- several device states in one stretch --------------------------------
+  //
+  // The reason all of this exists: a house on a small generator cannot run the
+  // salon air conditioner and the bedroom ones at once, so during the meal one
+  // is on and the others are off, and later it is the other way round.
+
+  await withPage(page(), async p => {
+    const call = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0],
+        ['climate.salon', 'climate.bedroom', 'light.salon', 'light.hallway']);
+      const group = dialog._plan.groups[0];
+      const meal = group.cubes[0];
+
+      dialog._updateCube(group.track, meal.id, {
+        action: { service: 'switch.turn_off', service_data: {} },
+        overrides: {
+          'climate.salon': { service: 'climate.set_temperature', service_data: { temperature: 16 } },
+          'light.salon': { service: 'light.turn_on', service_data: { brightness_pct: 50 } },
+          'light.hallway': { service: 'light.turn_on', service_data: { brightness_pct: 10 } },
+        },
+      });
+      await dialog.updateComplete;
+      await dialog._save();
+      return (window.__apiCalls || []).slice(-1)[0];
+    });
+
+    const meal = call.data.timeslots[0];
+    const byDevice = Object.fromEntries(meal.actions.map(a => [a.entity_id, a]));
+
+    s.ok(meal.actions.length === 4, 'one stretch, one action per device');
+    s.ok(byDevice['climate.salon'].service_data.temperature === 16,
+      'the salon air conditioner runs at its own temperature');
+    s.ok(byDevice['climate.bedroom'].service.endsWith('turn_off'),
+      'while the bedroom one is off - which is what the generator needs');
+    s.ok(byDevice['light.salon'].service_data.brightness_pct === 50
+      && byDevice['light.hallway'].service_data.brightness_pct === 10,
+      'and two lights on at different brightnesses in the same stretch');
+    s.ok(new Set(call.data.timeslots.map(e => e.track)).size === 1,
+      'still one track, one row: nothing was duplicated for any of them');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const read = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['climate.salon', 'light.salon']);
+      const group = dialog._plan.groups[0];
+      dialog._updateCube(group.track, group.cubes[0].id, {
+        overrides: {
+          'climate.salon': { service: 'climate.set_temperature', service_data: { temperature: 18 } },
+        },
+      });
+      await dialog._save();
+      const written = (window.__apiCalls || []).slice(-1)[0].data;
+      // reopen the editor on exactly what was written
+      const reopened = window.__planFromSchedule
+        ? null
+        : written.timeslots[0].actions.map(a => `${a.entity_id}:${JSON.stringify(a.service_data)}`);
+      return reopened;
+    });
+    s.ok(read.some(x => x.includes('"temperature":18')),
+      'a per-device temperature survives the save');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['climate.salon', 'light.salon']);
+      await dialog.updateComplete;
+    });
+    s.ok(await count_(p, '.device-row') === 2, 'every device gets a row of its own');
+    const params = await q(p, '.device-row .param');
+    s.ok(params.some(t => t.includes('טמפרטורה')), 'an air conditioner is offered a temperature');
+    s.ok(params.some(t => t.includes('בהירות')), 'and a light a brightness');
+    s.ok(!params.some(t => t.includes('טמפרטורה') && t.includes('בהירות')),
+      'never both on the same device');
   }, JERUSALEM);
 
   // --- reading the day back ------------------------------------------------

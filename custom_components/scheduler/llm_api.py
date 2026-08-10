@@ -131,21 +131,41 @@ A device named in an exception must also be in a group - an exception is a
 device leaving its group for a while, so there has to be a group to leave. Add
 "only_on": "2026-08-15" to make an exception happen once instead of weekly.
 
-ONE DEVICE DIFFERING INSIDE A STRETCH
-Do not copy the plan for a device that needs a different state in one stretch.
-Put an override on that stretch instead - the device stays in its group and
-follows it everywhere else:
+ONE STRETCH, SEVERAL DIFFERENT DEVICE STATES  (read this - it is the point)
+A stretch is not one state for everything. It has a state of its own, and then
+any number of devices doing something else, each with its own settings. This is
+what makes the common case work: a house on a small generator cannot run the
+salon air conditioner and the bedroom ones at the same time, so during the meal
+the salon is on and the bedrooms are off, and later it is the other way round.
 
-  {"name": "morning", "from": "havdalah@06:30", "to": "havdalah@13:00",
-   "state": "on", "overrides": [{"device": "switch.plata", "state": "off"}]}
+  {"name": "the meal", "from": "candle_lighting@20:00", "to": "candle_lighting@22:30",
+   "state": "off",
+   "overrides": [
+     {"device": "climate.salon",   "state": "on", "degrees": 16},
+     {"device": "light.salon",     "state": "on", "brightness": 50},
+     {"device": "light.corridor",  "state": "on", "brightness": 10}
+   ]}
 
-Use an exception instead only when the device needs its own *hours* - different
+  {"name": "night", "from": "candle_lighting@22:30", "to": "havdalah@06:30",
+   "state": "off",
+   "overrides": [
+     {"device": "climate.bedroom", "state": "on", "degrees": 24}
+   ]}
+
+So: "state" is what most of the group does, and "overrides" is everybody who
+differs. Never copy a plan, and never make a second group, just because devices
+disagree inside one stretch.
+
+Use an exception instead only when a device needs its own *hours* - different
 start and stop times from the group.
 
-LIGHTS
-"brightness" is 1-100 percent and "kelvin" is colour temperature: about 2200 is
-warm, 4000 neutral, 6500 daylight. Both apply to a stretch or to a single
-override, and both are ignored when the state is "off".
+SETTINGS
+"brightness" 1-100 percent and "kelvin" colour temperature (2200 warm, 4000
+neutral, 6500 daylight) apply to lights. "degrees" is the target temperature of
+an air conditioner or heater, 5-35 celsius. Each can be set on the stretch or on
+a single override, and a setting a device cannot take is simply left off - so
+one stretch safely carries a brightness for its lights and degrees for its air
+conditioner at the same time. All of them are ignored when the state is "off".
 
 HOLDING A STATE (experimental)
 "enforce": true on a stretch puts a device back if a wall switch or another
@@ -167,6 +187,7 @@ TIME_DESCRIPTION = (
 
 BRIGHTNESS = vol.All(vol.Coerce(int), vol.Range(min=1, max=100))
 KELVIN = vol.All(vol.Coerce(int), vol.Range(min=1500, max=8000))
+DEGREES = vol.All(vol.Coerce(float), vol.Range(min=5, max=35))
 
 OVERRIDE_SCHEMA = vol.Schema(
     {
@@ -180,6 +201,9 @@ OVERRIDE_SCHEMA = vol.Schema(
         vol.Optional(
             "kelvin", description="colour temperature: 2200 warm, 4000 neutral, 6500 daylight"
         ): KELVIN,
+        vol.Optional(
+            "degrees", description="target temperature in celsius, 5-35, air conditioners and heaters only"
+        ): DEGREES,
     }
 )
 
@@ -196,9 +220,15 @@ CUBE_SCHEMA = vol.Schema(
             "kelvin", description="colour temperature: 2200 warm, 4000 neutral, 6500 daylight"
         ): KELVIN,
         vol.Optional(
+            "degrees", description="target temperature in celsius, 5-35, air conditioners and heaters only"
+        ): DEGREES,
+        vol.Optional(
             "overrides",
-            description="devices of this group that do something different in this "
-            "stretch, instead of copying the whole plan for them",
+            description="devices of this group that do something OTHER than the "
+            "stretch's own state - each with its own state and its own settings. "
+            "This is how one stretch has the salon air conditioner on at 16 degrees "
+            "while the bedroom ones are off, and one light at 50 percent while "
+            "another is at 10.",
         ): [OVERRIDE_SCHEMA],
         vol.Optional(
             "enforce",
@@ -236,6 +266,9 @@ EXCEPTION_SCHEMA = vol.Schema(
         vol.Optional(
             "kelvin", description="colour temperature: 2200 warm, 4000 neutral, 6500 daylight"
         ): KELVIN,
+        vol.Optional(
+            "degrees", description="target temperature in celsius, 5-35, air conditioners and heaters only"
+        ): DEGREES,
         vol.Optional(
             "enforce", description="put the device back if something else moves it (experimental)"
         ): cv.boolean,

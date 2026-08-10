@@ -252,3 +252,44 @@ async def test_a_device_that_comes_back_is_caught_by_the_next_rung(entity, state
     await run_next(entity)
 
     assert [c["entity_id"] for c in entity.calls] == ["switch.plata"]
+
+
+# --- a setting that did not take is a failure too ----------------------------
+
+
+def test_a_temperature_that_did_not_take_is_still_pending(entity, states):
+    """Applying is not "the call went out", it is "the device got there"."""
+    entity.schedule[const.ATTR_TIMESLOTS] = [
+        slot("07:00:00", "22:00:00", track="group", entities=["climate.salon"],
+             service="climate.set_temperature"),
+    ]
+    entity.schedule[const.ATTR_TIMESLOTS][0][const.ATTR_ACTIONS][0]["service_data"] = {
+        "temperature": 16
+    }
+    entity._current_slots = {"group": 0}
+    states.set("climate.salon", "cool", {"temperature": 24})
+
+    pending = entity.async_pending_actions()
+
+    assert [a["entity_id"] for a in pending] == ["climate.salon"]
+
+    states.set("climate.salon", "cool", {"temperature": 16})
+    assert entity.async_pending_actions() == []
+
+
+async def test_the_ladder_keeps_going_until_the_setting_lands(entity, states):
+    entity.schedule[const.ATTR_TIMESLOTS] = [
+        slot("07:00:00", "22:00:00", track="group", entities=["light.salon"],
+             service="light.turn_on"),
+    ]
+    entity.schedule[const.ATTR_TIMESLOTS][0][const.ATTR_ACTIONS][0]["service_data"] = {
+        "brightness_pct": 80
+    }
+    entity._current_slots = {"group": 0}
+    states.set("light.salon", "on", {"brightness": 64})  # on, but nowhere near 80%
+    entity.async_start_recovery()
+
+    await run_next(entity)
+    await run_next(entity)
+
+    assert [c["entity_id"] for c in entity.calls] == ["light.salon"]

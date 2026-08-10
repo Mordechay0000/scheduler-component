@@ -39,6 +39,7 @@ import {
   defaultPlan,
   detachTrack,
   groupTrack,
+  cubeActionFor,
   planFromSchedule,
   planToSchedule,
 } from "../data/plan/plan_model";
@@ -604,16 +605,49 @@ export class DialogSchedulerPlan extends LitElement {
     this._drag = null;
   }
 
-  /** boundary `index` is the start of cube `index` and the stop of the one before */
+  /**
+   * Move the boundary between two stretches.
+   *
+   * Pushed into its neighbour, it shortens that neighbour and carries on
+   * pushing the ones after it - so dragging one boundary a long way squeezes
+   * the stretches ahead of it rather than swallowing them. Only when a
+   * neighbour has nothing left to give is it absorbed, and the row never runs
+   * past the end of the band.
+   */
   private _moveBoundary(track: string, index: number, value: string, coalesce?: string) {
     const group = this._plan.groups.find(g => g.track == track);
-    if (!group || !this._moment(value)) return;
+    const when = this._moment(value);
+    if (!group || !when) return;
 
-    const cubes = group.cubes.map((cube, i) => {
-      if (i == index) return { ...cube, start: value };
-      if (i == index - 1) return { ...cube, stop: value };
-      return cube;
-    });
+    const minimum = SNAP_MINUTES * 60000;
+    const at = (v: string) => this._moment(v)?.getTime() ?? null;
+    const cubes = group.cubes.map(cube => ({ ...cube }));
+
+    cubes[index] = { ...cubes[index], start: value };
+    if (index > 0) cubes[index - 1] = { ...cubes[index - 1], stop: value };
+
+    // push forwards: every boundary after this one keeps at least a minimum
+    let edge = when.getTime();
+    for (let i = index; i < cubes.length; i++) {
+      const stop = at(cubes[i].stop);
+      if (stop === null || stop >= edge + minimum) break;
+      edge += minimum;
+      const pushed = this._boundaryFromDate(new Date(edge));
+      cubes[i] = { ...cubes[i], stop: pushed };
+      if (i + 1 < cubes.length) cubes[i + 1] = { ...cubes[i + 1], start: pushed };
+    }
+
+    // and backwards, for a boundary dragged the other way
+    edge = when.getTime();
+    for (let i = index - 1; i >= 0; i--) {
+      const start = at(cubes[i].start);
+      if (start === null || start <= edge - minimum) break;
+      edge -= minimum;
+      const pushed = this._boundaryFromDate(new Date(edge));
+      cubes[i] = { ...cubes[i], start: pushed };
+      if (i > 0) cubes[i - 1] = { ...cubes[i - 1], stop: pushed };
+    }
+
     this._setCubes(track, cubes, coalesce);
   }
 
@@ -645,7 +679,8 @@ export class DialogSchedulerPlan extends LitElement {
     let out = cubes.filter(cube => {
       const from = at(cube.start);
       const to = at(cube.stop);
-      // a stretch with no length left has been absorbed by its neighbour
+      // pushing keeps a stretch alive wherever it can; anything still with no
+      // length left had nowhere to be pushed to, and is absorbed
       return from === null || to === null || to - from >= minimum;
     });
     if (!out.length) return cubes.slice(0, 1);
@@ -1461,53 +1496,161 @@ export class DialogSchedulerPlan extends LitElement {
   }
 
   /**
-   * The devices of the group, each showing what it does in this stretch.
+   * Every device of the group, each with its own state and its own settings.
    *
-   * Clicking one flips it away from the group and back again, so a stretch
-   * where the lights are on but the hotplate is off is two clicks rather than
-   * a second copy of the whole timeline.
+   * A stretch is not one state for everything, and it cannot be: a house on a
+   * small generator runs the salon air conditioner during the meal and the
+   * bedroom ones afterwards, never both. So each device gets a row here - on
+   * or off, and whatever it takes: brightness and warmth for a light, degrees
+   * for an air conditioner. A device with no row of its own simply follows the
+   * stretch.
    */
   private _renderOverrides(group: PlanGroup, cube: PlanCube) {
-    if (group.entities.length < 2) return nothing;
-    const groupIsOff = isOffAction(cube.action);
+    if (!group.entities.length) return nothing;
 
     return html`
       <div class="overrides">
         <label>${this._t('override.label')}</label>
-        <div class="member-chips">
-          ${group.entities.map(entity => {
-      const own = cube.overrides?.[entity];
-      const off = own ? isOffAction(own) : groupIsOff;
-      return html`
-            <button
-              class="chip device ${off ? 'off' : 'on'} ${own ? 'overridden' : ''}"
-              title=${own ? this._t('override.back') : this._t('override.flip')}
-              @click=${() => this._toggleOverride(group, cube, entity)}
-            >
-              <span class="device-dot"></span>
-              ${this.hass.states[entity]?.attributes.friendly_name || entity}
-              <span class="device-state">${this._t(off ? 'state.off' : 'state.on')}</span>
-            </button>`;
-    })}
+        <div class="device-rows">
+          ${group.entities.map(entity => this._renderDeviceRow(group, cube, entity))}
         </div>
         <span class="hint">${this._t('override.hint')}</span>
       </div>
     `;
   }
 
-  private _toggleOverride(group: PlanGroup, cube: PlanCube, entity: string) {
-    const overrides = { ...(cube.overrides || {}) };
-    if (overrides[entity]) {
-      // back with the group
-      delete overrides[entity];
-    } else {
-      const opposite = invertOnOffAction(cube.action);
-      if (!opposite) return;
-      overrides[entity] = opposite;
+  private _renderDeviceRow(group: PlanGroup, cube: PlanCube, entity: string) {
+    const own = cube.overrides?.[entity];
+    const action = cubeActionFor(cube, entity);
+    const off = isOffAction(action);
+    const domain = entity.split('.')[0];
+
+    const set = (changes: Partial<Action>) => this._setDeviceAction(group, cube, entity, {
+      ...action,
+      ...changes,
+    });
+
+    return html`
+      <div class="device-row ${own ? 'own' : ''}">
+        <span class="device-label">
+          <span class="device-dot ${off ? '' : 'on'}"></span>
+          ${this.hass.states[entity]?.attributes.friendly_name || entity}
+          ${own
+        ? html`<button class="link" @click=${() => this._clearDeviceAction(group, cube, entity)}>
+              ${this._t('override.back')}
+            </button>`
+        : html`<em class="follows">${this._t('override.follows')}</em>`}
+        </span>
+
+        <div class="segmented">
+          <button class=${off ? '' : 'active'} @click=${() =>
+        set({ service: `${domain}.turn_on` })}>${this._t('state.on')}</button>
+          <button class=${off ? 'active' : ''} @click=${() =>
+        set({ service: `${domain}.turn_off`, service_data: {} })}>${this._t('state.off')}</button>
+        </div>
+
+        ${off ? nothing : this._renderDeviceParameters(domain, action, set)}
+      </div>
+    `;
+  }
+
+  /** only what the device can actually be told */
+  private _renderDeviceParameters(
+    domain: string,
+    action: Action,
+    set: (changes: Partial<Action>) => void
+  ) {
+    const data = action.service_data || {};
+    const withData = (changes: Record<string, any>) => {
+      const service_data = { ...data, ...changes };
+      Object.keys(service_data).forEach(key => {
+        if (service_data[key] === undefined) delete service_data[key];
+      });
+      set({ service_data });
+    };
+
+    if (domain == 'light') {
+      const brightness = data.brightness_pct ?? (
+        data.brightness !== undefined ? Math.round((data.brightness / 255) * 100) : undefined
+      );
+      const kelvin = data.color_temp_kelvin;
+      return html`
+        <label class="param">
+          <input type="checkbox" ?checked=${brightness !== undefined}
+            @change=${(ev: Event) => withData({
+        brightness_pct: (ev.target as HTMLInputElement).checked ? 100 : undefined,
+        brightness: undefined,
+      })} />
+          ${this._t('light.brightness')}
+          <input type="range" min="1" max="100" .value=${String(brightness ?? 100)}
+            ?disabled=${brightness === undefined}
+            @input=${(ev: Event) => withData({
+        brightness_pct: Number((ev.target as HTMLInputElement).value), brightness: undefined,
+      })} />
+          <span class="field-value">${brightness === undefined ? '—' : `${brightness}%`}</span>
+        </label>
+        <label class="param">
+          <input type="checkbox" ?checked=${kelvin !== undefined}
+            @change=${(ev: Event) => withData({
+        color_temp_kelvin: (ev.target as HTMLInputElement).checked ? 2700 : undefined,
+      })} />
+          ${this._t('light.warmth')}
+          <input class="kelvin" type="range" min="2000" max="6500" step="100"
+            .value=${String(kelvin ?? 2700)} ?disabled=${kelvin === undefined}
+            @input=${(ev: Event) => withData({
+        color_temp_kelvin: Number((ev.target as HTMLInputElement).value),
+      })} />
+          <span class="field-value">${kelvin === undefined ? '—' : `${kelvin}K`}</span>
+        </label>`;
     }
+
+    if (domain == 'climate') {
+      const degrees = data.temperature;
+      return html`
+        <label class="param">
+          <input type="checkbox" ?checked=${degrees !== undefined}
+            @change=${(ev: Event) => {
+        const on = (ev.target as HTMLInputElement).checked;
+        set({
+          service: on ? 'climate.set_temperature' : 'climate.turn_on',
+          service_data: on ? { ...data, temperature: 24 } : {},
+        });
+      }} />
+          ${this._t('climate.degrees')}
+          <input type="range" min="16" max="30" step="1"
+            .value=${String(degrees ?? 24)} ?disabled=${degrees === undefined}
+            @input=${(ev: Event) => set({
+        service: 'climate.set_temperature',
+        service_data: { ...data, temperature: Number((ev.target as HTMLInputElement).value) },
+      })} />
+          <span class="field-value">${degrees === undefined ? '—' : `${degrees}°`}</span>
+        </label>`;
+    }
+    return nothing;
+  }
+
+  private _setDeviceAction(group: PlanGroup, cube: PlanCube, entity: string, action: Action) {
+    this._updateCube(group.track, cube.id, {
+      overrides: { ...(cube.overrides || {}), [entity]: action },
+    });
+  }
+
+  private _clearDeviceAction(group: PlanGroup, cube: PlanCube, entity: string) {
+    const overrides = { ...(cube.overrides || {}) };
+    delete overrides[entity];
     this._updateCube(group.track, cube.id, {
       overrides: Object.keys(overrides).length ? overrides : undefined,
     });
+  }
+
+  /** kept for the keyboard: flip one device away from its group and back */
+  private _toggleOverride(group: PlanGroup, cube: PlanCube, entity: string) {
+    if (cube.overrides?.[entity]) {
+      this._clearDeviceAction(group, cube, entity);
+      return;
+    }
+    const opposite = invertOnOffAction(cubeActionFor(cube, entity));
+    if (opposite) this._setDeviceAction(group, cube, entity, opposite);
   }
 
   /** brightness and warmth, for the devices that have them */
@@ -2243,6 +2386,46 @@ export class DialogSchedulerPlan extends LitElement {
         letter-spacing: 0.06em;
         color: var(--secondary-text-color);
       }
+      .device-rows { display: flex; flex-direction: column; gap: 6px; }
+      .device-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+      }
+      .device-row.own { border-color: rgba(var(--plan-detach), 0.55); }
+      .device-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 190px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--primary-text-color);
+      }
+      .follows { font-style: normal; font-size: 11px; font-weight: 400; color: var(--secondary-text-color); }
+      .link {
+        font: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        border: none;
+        background: none;
+        padding: 0;
+        cursor: pointer;
+        color: rgba(var(--plan-detach), 1);
+      }
+      .param {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--secondary-text-color);
+      }
+      .param input[type="range"] { width: 96px; }
       .chip.device { gap: 8px; }
       .device-dot {
         width: 8px;

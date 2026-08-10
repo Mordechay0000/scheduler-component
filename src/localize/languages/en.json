@@ -401,9 +401,10 @@
         },
         "override": {
           "label": "Devices in this stretch",
-          "hint": "Click a device to make it do the opposite here. It stays in the group and follows it again in every other stretch.",
+          "hint": "Each device can do its own thing here, with its own settings — the salon air conditioner on at 16° while the bedrooms are off. A device with nothing set of its own simply follows the stretch.",
           "flip": "make this one differ here",
-          "back": "back with the group"
+          "back": "follow the stretch",
+          "follows": "follows the stretch"
         },
         "light": {
           "brightness": "Brightness",
@@ -441,6 +442,9 @@
           "own": "its own",
           "taken": "until \"{name}\"",
           "saved": "Saved. This is what it will do."
+        },
+        "climate": {
+          "degrees": "Temperature"
         }
       }
     }

@@ -39,23 +39,26 @@ class PlanError(ValueError):
 
 @dataclass
 class DeviceState:
-    """What one device is asked to do: on or off, and how brightly.
+    """What one device is asked to do, and with what settings.
 
     `brightness` is a percentage and `kelvin` a colour temperature - warm at
-    around 2200, daylight at around 6500. Both only mean anything for a light
-    being turned on, and both are left out of the service call when unset.
+    around 2200, daylight at around 6500 - and both only mean anything to a
+    light. `degrees` is the target temperature of an air conditioner or a
+    heater. Anything unset is simply left out of the service call, so a device
+    is never told something it cannot do.
     """
 
     state: str = ON
     brightness: int | None = None
     kelvin: int | None = None
+    degrees: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"state": self.state}
-        if self.brightness is not None:
-            out["brightness"] = self.brightness
-        if self.kelvin is not None:
-            out["kelvin"] = self.kelvin
+        for key in ("brightness", "kelvin", "degrees"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
         return out
 
 
@@ -75,14 +78,15 @@ class Cube:
     color: str | None = None
     brightness: int | None = None
     kelvin: int | None = None
-    #: entity id -> what that one device does instead
+    degrees: float | None = None
+    #: entity id -> what that one device does here, instead of the group's state
     overrides: dict[str, DeviceState] = field(default_factory=dict)
     #: put the devices back if something else moves them during this stretch
     enforce: bool = False
 
     def for_device(self, device: str) -> DeviceState:
         return self.overrides.get(
-            device, DeviceState(self.state, self.brightness, self.kelvin)
+            device, DeviceState(self.state, self.brightness, self.kelvin, self.degrees)
         )
 
 
@@ -106,6 +110,7 @@ class PlanException:
     state: str = ON
     brightness: int | None = None
     kelvin: int | None = None
+    degrees: float | None = None
     only_on: str | None = None
     enforce: bool = False
 
@@ -138,17 +143,34 @@ def takes_light_parameters(device: str) -> bool:
     return device.split(".")[0] == "light"
 
 
+def takes_degrees(device: str) -> bool:
+    return device.split(".")[0] == "climate"
+
+
 def _action_for(device: str, wanted: DeviceState) -> dict[str, Any]:
-    """The service call one device gets for one stretch."""
+    """The service call one device gets for one stretch.
+
+    Settings a device cannot take are dropped rather than sent, so one stretch
+    can carry a brightness for its lights and a temperature for its air
+    conditioner without either being told the other's business.
+    """
     service_data: dict[str, Any] = {}
-    # brightness and colour only mean anything on the way on, and only to a light
-    if wanted.state == ON and takes_light_parameters(device):
-        if wanted.brightness is not None:
-            service_data["brightness_pct"] = wanted.brightness
-        if wanted.kelvin is not None:
-            service_data["color_temp_kelvin"] = wanted.kelvin
+    service = _service(device, wanted.state)
+
+    if wanted.state == ON:
+        if takes_light_parameters(device):
+            if wanted.brightness is not None:
+                service_data["brightness_pct"] = wanted.brightness
+            if wanted.kelvin is not None:
+                service_data["color_temp_kelvin"] = wanted.kelvin
+        elif takes_degrees(device) and wanted.degrees is not None:
+            # setting a temperature is how a climate device is turned on to a
+            # particular setting; turn_on alone would leave it wherever it was
+            service = "climate.set_temperature"
+            service_data["temperature"] = wanted.degrees
+
     return {
-        "service": _service(device, wanted.state),
+        "service": service,
         "entity_id": device,
         "service_data": service_data,
     }
@@ -156,14 +178,18 @@ def _action_for(device: str, wanted: DeviceState) -> dict[str, Any]:
 
 def _device_state_of(action: dict[str, Any]) -> DeviceState:
     service_data = action.get("service_data") or {}
+    service = action.get("service", "")
     kelvin = service_data.get("color_temp_kelvin")
+    degrees = service_data.get("temperature")
     brightness = service_data.get("brightness_pct")
     if brightness is None and service_data.get("brightness") is not None:
         brightness = round(float(service_data["brightness"]) / 255 * 100)
     return DeviceState(
-        state=_state_of(action.get("service", "")),
+        # set_temperature is a way of being on, not a third state
+        state=OFF if service.endswith("turn_off") else ON,
         brightness=int(brightness) if brightness is not None else None,
         kelvin=int(kelvin) if kelvin is not None else None,
+        degrees=float(degrees) if degrees is not None else None,
     )
 
 
@@ -171,7 +197,7 @@ def _device_state_of(action: dict[str, Any]) -> DeviceState:
 
 
 def _key(wanted: DeviceState):
-    return (wanted.state, wanted.brightness, wanted.kelvin)
+    return (wanted.state, wanted.brightness, wanted.kelvin, wanted.degrees)
 
 
 def _cube_from_slot(slot: dict[str, Any], anchors: dict[str, str]) -> Cube:
@@ -189,11 +215,17 @@ def _cube_from_slot(slot: dict[str, Any], anchors: dict[str, str]) -> Cube:
 
     common = DeviceState(_state_of(slot["actions"][0].get("service", "")))
     if per_device:
-        tally: dict[tuple, int] = {}
-        for wanted in per_device.values():
-            tally[_key(wanted)] = tally.get(_key(wanted), 0) + 1
-        winner = max(tally, key=lambda k: tally[k])
-        common = next(w for w in per_device.values() if _key(w) == winner)
+        settings = list(per_device.values())
+        if all(_key(w) == _key(settings[0]) for w in settings):
+            # everything agrees, so it is simply the stretch's own state
+            common = settings[0]
+        else:
+            # They differ - which is the whole point of a stretch: the salon air
+            # conditioner on at 16 while the bedrooms are off. There is no
+            # sensible shared setting then, so the stretch keeps only the plainer
+            # of on and off and every device carries its own.
+            on_count = sum(1 for w in settings if w.state == ON)
+            common = DeviceState(ON if on_count * 2 > len(settings) else OFF)
 
     return Cube(
         name=slot.get("name") or "",
@@ -319,7 +351,12 @@ def plan_to_timeslots(plan: Plan) -> list[dict[str, Any]]:
                 "actions": [
                     _action_for(
                         exception.device,
-                        DeviceState(exception.state, exception.brightness, exception.kelvin),
+                        DeviceState(
+                            exception.state,
+                            exception.brightness,
+                            exception.kelvin,
+                            exception.degrees,
+                        ),
                     )
                 ],
                 **_empty_conditions(),
@@ -455,12 +492,17 @@ def _check_overlaps(group: Group) -> None:
 def _check_parameters(item: Cube | PlanException | DeviceState, where: str) -> None:
     brightness = getattr(item, "brightness", None)
     kelvin = getattr(item, "kelvin", None)
+    degrees = getattr(item, "degrees", None)
     if brightness is not None and not 1 <= brightness <= 100:
         raise PlanError(f"{where}: brightness is a percentage, 1 to 100, not {brightness}.")
     if kelvin is not None and not 1500 <= kelvin <= 8000:
         raise PlanError(
             f"{where}: kelvin is a colour temperature, roughly 2200 (warm) to 6500 "
             f"(daylight), not {kelvin}."
+        )
+    if degrees is not None and not 5 <= degrees <= 35:
+        raise PlanError(
+            f"{where}: degrees is a target temperature in celsius, 5 to 35, not {degrees}."
         )
 
 
@@ -557,7 +599,9 @@ def describe_plan(plan: Plan) -> dict[str, Any]:
             for device in group.devices:
                 wanted = cube.for_device(device)
                 if not takes_light_parameters(device):
-                    wanted = DeviceState(wanted.state)
+                    wanted = DeviceState(
+                        wanted.state, degrees=wanted.degrees if takes_degrees(device) else None
+                    )
                 taken_over = [
                     exception
                     for exception in plan.exceptions
@@ -656,6 +700,7 @@ def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) 
                     state=cube.get("state", ON),
                     brightness=cube.get("brightness"),
                     kelvin=cube.get("kelvin"),
+                    degrees=cube.get("degrees"),
                     color=cube.get("color"),
                     enforce=bool(cube.get("enforce")),
                     overrides={
@@ -663,6 +708,7 @@ def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) 
                             state=override.get("state", ON),
                             brightness=override.get("brightness"),
                             kelvin=override.get("kelvin"),
+                            degrees=override.get("degrees"),
                         )
                         for override in (cube.get("overrides") or [])
                         if _require_device(override)
@@ -686,6 +732,7 @@ def plan_from_dict(data: dict[str, Any], anchors: dict[str, str] | None = None) 
                 state=raw.get("state", ON),
                 brightness=raw.get("brightness"),
                 kelvin=raw.get("kelvin"),
+                degrees=raw.get("degrees"),
                 only_on=raw.get("only_on"),
                 enforce=bool(raw.get("enforce")),
             )
@@ -714,6 +761,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                         "state": cube.state,
                         **({"brightness": cube.brightness} if cube.brightness is not None else {}),
                         **({"kelvin": cube.kelvin} if cube.kelvin is not None else {}),
+                        **({"degrees": cube.degrees} if cube.degrees is not None else {}),
                         **({"color": cube.color} if cube.color else {}),
                         **({"enforce": True} if cube.enforce else {}),
                         **(
@@ -741,6 +789,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                 "state": exception.state,
                 **({"brightness": exception.brightness} if exception.brightness is not None else {}),
                 **({"kelvin": exception.kelvin} if exception.kelvin is not None else {}),
+                **({"degrees": exception.degrees} if exception.degrees is not None else {}),
                 **({"only_on": exception.only_on} if exception.only_on else {}),
                 **({"enforce": True} if exception.enforce else {}),
             }
