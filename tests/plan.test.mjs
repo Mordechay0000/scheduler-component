@@ -939,6 +939,46 @@ export default async function run() {
     s.ok(written.afterEnd === HAVDALAH + '+01:00:00', 'in both directions');
   }, JERUSALEM);
 
+  // --- one colour decision, reaching everything ---------------------------
+
+  await withPage(page(), async p => {
+    const painted = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const group = dialog._plan.groups[0];
+      dialog._setMembers(group, ['light.salon', 'switch.boiler']);
+      dialog._selected = dialog._plan.groups[0].cubes[0].id;
+      dialog._showReport();
+      await dialog.updateComplete;
+
+      const read = () => {
+        const on = dialog.shadowRoot.querySelector('.report-device.on');
+        const button = dialog.shadowRoot.querySelector('.segmented.states button.on.active');
+        return {
+          attribute: dialog.hasAttribute('plain'),
+          device: on ? getComputedStyle(on).backgroundColor : '',
+          button: button ? getComputedStyle(button).backgroundColor : '',
+        };
+      };
+
+      const plain = read();
+      dialog._setPlainColours(false);
+      await dialog.updateComplete;
+      const action = read();
+      return { plain, action, stored: window.localStorage.getItem('scheduler-card.plan-prefs') };
+    });
+
+    s.ok(painted.plain.attribute && !painted.action.attribute,
+      'the colour scheme is one decision, not a setting per screen');
+    s.ok(/67, *160, *71/.test(painted.plain.device),
+      'plain paints "on" green in the day report');
+    s.ok(/67, *160, *71/.test(painted.plain.button), 'and on the buttons that set it');
+    s.ok(!/67, *160, *71/.test(painted.action.device)
+      && !/67, *160, *71/.test(painted.action.button),
+      'and turning it off really does put both back');
+    s.ok(JSON.parse(painted.stored).plainColours === false,
+      'the choice is remembered for next time');
+  }, JERUSALEM);
+
   // --- the editor asks the same one question ------------------------------
 
   await withPage(page(), async p => {

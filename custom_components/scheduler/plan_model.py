@@ -519,6 +519,29 @@ def warnings_for(plan: Plan) -> list[str]:
                     "Nothing is set in between, so the devices stay as they were."
                 )
 
+    # a clock reading is the one kind of boundary that can behave differently
+    # another week, and the behaviour is worth spelling out rather than
+    # discovering in June
+    hard: list[str] = []
+    for group in plan.groups:
+        for index, cube in enumerate(group.cubes):
+            for expression in (cube.start, cube.stop):
+                if parse_time(expression, plan.anchors).op != "@":
+                    continue
+                label = f"'{cube.name or f'#{index + 1}'}' ({expression})"
+                if label not in hard:
+                    hard.append(label)
+    if hard:
+        notes.append(
+            f"{', '.join(hard)} use a fixed clock time. That works on a Shabbat like "
+            "the coming one, but candle lighting and havdalah move by more than an "
+            "hour across the year, so the same reading can fall outside the band on "
+            "another Shabbat. Nothing breaks when it does: that stretch simply does "
+            "not run, and the one before it carries on - the same devices in the "
+            "same state - until the next boundary that does land inside. Measuring "
+            "from candle_lighting or havdalah instead avoids it entirely."
+        )
+
     shabbat_only = [a for a in plan.anchors.values() if "upcoming_shabbat_" in a]
     if shabbat_only:
         notes.append(

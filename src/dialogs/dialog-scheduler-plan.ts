@@ -1030,6 +1030,18 @@ export class DialogSchedulerPlan extends LitElement {
 
   // --- render --------------------------------------------------------------
 
+  /**
+   * The colour scheme, reflected where the stylesheet can see it.
+   *
+   * Plain on/off is one decision, not a dozen: every green and every grey in
+   * here - buttons, dots, the day report, the wizard's read-back - hangs off
+   * this attribute, so turning it off really does put everything back to the
+   * theme's own colours rather than leaving half the screen shouting.
+   */
+  protected updated() {
+    this.toggleAttribute('plain', this._plainColours);
+  }
+
   render() {
     if (!this._params) return html``;
 
@@ -3171,8 +3183,8 @@ export class DialogSchedulerPlan extends LitElement {
         color: var(--secondary-text-color);
         border: 1px dashed var(--divider-color);
       }
-      .segmented button.on.active { background: rgb(var(--plan-on)); }
-      .segmented button.off.active { background: rgba(var(--plan-off), 0.85); }
+      :host([plain]) .segmented button.on.active { background: rgb(var(--plan-on)); }
+      :host([plain]) .segmented button.off.active { background: rgba(var(--plan-off), 0.85); }
       .segmented button.none.active {
         background: repeating-linear-gradient(
           135deg,
@@ -3187,7 +3199,8 @@ export class DialogSchedulerPlan extends LitElement {
         background: transparent;
         border: 1px dashed var(--secondary-text-color);
       }
-      .device-dot.off { background: rgba(var(--plan-off), 0.55); }
+      :host([plain]) .device-dot.on { background: rgb(var(--plan-on)); }
+      :host([plain]) .device-dot.off { background: rgba(var(--plan-off), 0.55); }
       .report-device.untouched {
         background: transparent;
         border: 1px dashed var(--divider-color);
@@ -3575,10 +3588,11 @@ export class DialogSchedulerPlan extends LitElement {
         gap: 5px;
         padding: 3px 10px;
         border-radius: 999px;
-        background: rgba(var(--plan-off), 0.12);
+        background: rgba(var(--rgb-secondary-text-color, 114, 114, 114), 0.1);
         color: var(--primary-text-color);
       }
-      .report-device.on { background: rgba(var(--plan-on), 0.15); }
+      :host([plain]) .report-device.off { background: rgba(var(--plan-off), 0.18); }
+      :host([plain]) .report-device.on { background: rgba(var(--plan-on), 0.15); }
       .report-device b { font-weight: 700; }
       .report-device i { font-style: normal; color: var(--secondary-text-color); }
       .report-device em {
@@ -3848,11 +3862,15 @@ export class DialogSchedulerPlan extends LitElement {
         padding: 3px 10px;
         border-radius: 999px;
       }
-      .review-state.on {
+      .review-state {
+        background: rgba(var(--rgb-secondary-text-color, 114, 114, 114), 0.12);
+        color: var(--secondary-text-color);
+      }
+      :host([plain]) .review-state.on {
         background: rgba(var(--plan-on), 0.18);
         color: rgb(var(--plan-on));
       }
-      .review-state.off {
+      :host([plain]) .review-state.off {
         background: rgba(var(--plan-off), 0.18);
         color: var(--secondary-text-color);
       }

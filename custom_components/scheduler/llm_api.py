@@ -81,6 +81,20 @@ The mistake to avoid: an ordinary clock time inside the band, such as "off at
 day the band opened. A plain "22:30" fires every night of the week. Call
 scheduler_explain_time when unsure.
 
+STRETCHES MEET, AND WHAT A CLOCK TIME COSTS
+A stretch begins where the one before it ends, so write each "from" as the
+previous "to". A gap is legal and almost never meant: nothing is set in
+between, and the devices keep whatever they had.
+
+Only a clock reading - the @ form - is fixed while the band's own ends move
+through the year, by more than an hour between winter and summer. So a
+candle_lighting@22:30 that sits comfortably inside the band this week can fall
+outside it on another Shabbat. Nothing breaks when that happens: the stretch
+simply does not run, and the one before it carries on, the same devices in the
+same state, until the next boundary that does land inside. Say this out loud
+when you write one, and offer havdalah-2h or candle_lighting+3h instead when
+the person only meant "a couple of hours in".
+
 NAMES THE HOUSEHOLD USES
 scheduler_get_device_book holds their own names and groupings - "the air
 conditioners", "salon air conditioner". Anywhere a plan takes a device you may

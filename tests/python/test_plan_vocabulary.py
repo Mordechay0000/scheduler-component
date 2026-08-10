@@ -115,10 +115,36 @@ def test_the_mistake_people_actually_make_is_called_out():
     assert "havdalah@22:30" in notes[0]
 
 
-def test_a_day_anchored_time_draws_no_warning():
+def test_a_day_anchored_time_is_right_but_says_what_it_costs():
+    """The @ form is the right way to write it, and still worth a word.
+
+    It is tied to the correct day, which is the whole point of it. But it is a
+    fixed reading while the band's ends move by more than an hour across the
+    year, so the caution is not "do not do this" - it is what will happen on a
+    Shabbat where it lands outside.
+    """
     plan = Plan(
         name="x",
         groups=[Group("home", ["light.a"], [Cube("night", "candle_lighting", "havdalah@06:30")])],
+    )
+    notes = warnings_for(plan)
+    assert len(notes) == 1
+    assert "'night' (havdalah@06:30)" in notes[0]
+    assert "does not run" in notes[0]
+    assert "the one before it carries on" in notes[0]
+
+
+def test_a_plan_measured_from_the_anchors_is_left_alone():
+    """Nothing to caution about: both ends move with the band."""
+    plan = Plan(
+        name="x",
+        groups=[
+            Group(
+                "home",
+                ["light.a"],
+                [Cube("night", "candle_lighting+1h", "havdalah-30m")],
+            )
+        ],
     )
     assert warnings_for(plan) == []
 
