@@ -23,6 +23,15 @@ from homeassistant.helpers import config_validation as cv, llm
 from homeassistant.util.json import JsonObjectType
 
 from . import const
+from .device_book import (
+    KINDS,
+    async_get_book,
+    async_name_device,
+    async_remove_group,
+    async_resolve,
+    async_set_group,
+    async_set_kind,
+)
 from .plan_model import (
     PLAN_TAG,
     PlanError,
@@ -72,7 +81,19 @@ The mistake to avoid: an ordinary clock time inside the band, such as "off at
 day the band opened. A plain "22:30" fires every night of the week. Call
 scheduler_explain_time when unsure.
 
+NAMES THE HOUSEHOLD USES
+scheduler_get_device_book holds their own names and groupings - "the air
+conditioners", "salon air conditioner". Anywhere a plan takes a device you may
+use one of those names instead of an entity id, and it is resolved for you. Use
+scheduler_set_device_group and scheduler_name_device to build the book when
+somebody describes their devices in words.
+
+The book also records what a device really is. Many are registered under the
+wrong domain - an air conditioner behind a switch - and the kind is what decides
+whether brightness or a temperature can be asked of it.
+
 HOW TO WORK - in this order
+  0. scheduler_get_device_book  if devices are being talked about by name
   1. scheduler_list_devices     to find entity ids
   2. scheduler_get_plan         to see what exists already
   3. scheduler_preview_plan     to check a plan WITHOUT saving it, and to show
@@ -270,6 +291,39 @@ def _write(hass: HomeAssistant, payload: dict[str, Any], schedule_id: str | None
         coordinator.async_create_schedule(data)
 
 
+def _resolve_plan_devices(hass: HomeAssistant, plan: dict[str, Any]) -> dict[str, Any]:
+    """Let a plan name devices and groups the way the household does.
+
+    "the air conditioners" or "salon air conditioner" is turned into entity ids
+    here, so a caller never has to look one up when the book already knows it.
+    """
+    out = dict(plan)
+    out["groups"] = [
+        {**group, "devices": async_resolve(hass, list(group.get("devices") or []))}
+        for group in (plan.get("groups") or [])
+    ]
+    out["exceptions"] = [
+        {
+            **exception,
+            **(
+                {"device": async_resolve(hass, [exception["device"]])[0]}
+                if exception.get("device")
+                else {}
+            ),
+        }
+        for exception in (plan.get("exceptions") or [])
+    ]
+    for group in out["groups"]:
+        for cube in group.get("cubes") or []:
+            if cube.get("overrides"):
+                cube["overrides"] = [
+                    {**override, "device": async_resolve(hass, [override["device"]])[0]}
+                    for override in cube["overrides"]
+                    if override.get("device")
+                ]
+    return out
+
+
 class _SchedulerTool(llm.Tool):
     """Shared plumbing: a tool never raises, it explains."""
 
@@ -405,7 +459,8 @@ class PreviewPlanTool(_SchedulerTool):
     parameters = vol.Schema({vol.Required("plan"): PLAN_SCHEMA})
 
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
-        return {"ok": True, "saved": False, "report": describe_plan(plan_from_dict(args["plan"]))}
+        plan = plan_from_dict(_resolve_plan_devices(hass, args["plan"]))
+        return {"ok": True, "saved": False, "report": describe_plan(plan)}
 
 
 class GetPlanTool(_SchedulerTool):
@@ -445,7 +500,7 @@ class SavePlanTool(_SchedulerTool):
     parameters = vol.Schema({vol.Required("plan"): PLAN_SCHEMA})
 
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
-        plan = plan_from_dict(args["plan"])
+        plan = plan_from_dict(_resolve_plan_devices(hass, args["plan"]))
         payload = plan_to_payload(plan)
 
         existing = _find_plan(hass)
@@ -571,7 +626,113 @@ class DeleteScheduleTool(_SchedulerTool):
         return {"ok": True, "deleted": schedule_id}
 
 
+class GetDeviceBookTool(_SchedulerTool):
+    name = f"{const.DOMAIN}_get_device_book"
+    description = (
+        "The household's own names and groupings for its devices. Read this first when "
+        "someone talks about devices by name - 'the air conditioners', 'salon air "
+        "conditioner' - because a plan may then use those names directly instead of "
+        "entity ids. It also says what each device really is, which decides whether "
+        "brightness or a temperature can be asked of it."
+    )
+
+    async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
+        book = async_get_book(hass)
+        return {
+            "ok": True,
+            **book,
+            "note": "Names and groups from here can be used anywhere a plan takes a "
+                    "device, in place of an entity id.",
+        }
+
+
+class SetDeviceGroupTool(_SchedulerTool):
+    name = f"{const.DOMAIN}_set_device_group"
+    description = (
+        "Create a group of devices, or change which devices are in one. The group is "
+        "stored as a Home Assistant label, so it is visible and usable outside the "
+        "scheduler too. Passing an empty list of devices removes the group."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required("group", description="what the group is called, e.g. 'air conditioners'"): cv.string,
+            vol.Required(
+                "devices",
+                description="entity ids, or names already in the book; empty removes the group",
+            ): [cv.string],
+        }
+    )
+
+    async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
+        group = args["group"].strip()
+        devices = async_resolve(hass, list(args["devices"]))
+        if not devices:
+            removed = await async_remove_group(hass, group)
+            if not removed:
+                return _fail(
+                    f"There is no group '{group}'. Call {const.DOMAIN}_get_device_book "
+                    "to see the ones that exist."
+                )
+            return {"ok": True, "removed": group}
+
+        missing = [d for d in devices if hass.states.get(d) is None]
+        if missing:
+            return _fail(
+                f"{', '.join(missing)} - no such device. Call {const.DOMAIN}_list_devices "
+                "to find the right entity ids."
+            )
+        await async_set_group(hass, group, devices)
+        return {"ok": True, "group": group, "devices": devices}
+
+
+class NameDeviceTool(_SchedulerTool):
+    name = f"{const.DOMAIN}_name_device"
+    description = (
+        "Give a device the name the household calls it by, and optionally correct what "
+        "kind of device it is. The name is stored as a Home Assistant alias, so it also "
+        "works when speaking to Assist. Correcting the kind matters when a device is "
+        "registered under the wrong domain - an air conditioner behind a switch - "
+        "because the kind decides whether brightness or a temperature can be set."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required("device", description="entity id, e.g. 'switch.ac_salon'"): cv.string,
+            vol.Optional(
+                "name", description="what to call it; omit or leave empty to clear the name"
+            ): cv.string,
+            vol.Optional(
+                "kind", description=f"what it really is: {', '.join(sorted(KINDS))}"
+            ): vol.In(sorted(KINDS)),
+        }
+    )
+
+    async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
+        device = args["device"]
+        if hass.states.get(device) is None:
+            return _fail(
+                f"'{device}' is not a device here. Call {const.DOMAIN}_list_devices to "
+                "find the right entity id."
+            )
+        try:
+            if "name" in args:
+                await async_name_device(hass, device, args["name"].strip() or None)
+            if "kind" in args:
+                async_set_kind(hass, device, args["kind"])
+                coordinator = _coordinator(hass)
+                if coordinator:
+                    coordinator.store.async_set_device_kind(device, args["kind"])
+        except ValueError as err:
+            return _fail(str(err))
+
+        book = async_get_book(hass)
+        entry = next((d for d in book["devices"] if d["entity_id"] == device), None)
+        return {"ok": True, "device": entry}
+
+
 TOOLS: list[type[_SchedulerTool]] = [
+    GetDeviceBookTool,
+    SetDeviceGroupTool,
+    NameDeviceTool,
     ListDevicesTool,
     ExplainTimeTool,
     DescribeAnchorsTool,

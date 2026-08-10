@@ -91,6 +91,10 @@ ATTR_COLOR = "color"
 # Hold the entities to what this slot asked for: if something else moves one
 # while the slot is running, set it back. Experimental.
 ATTR_ENFORCE = "enforce"
+
+# The device book: groups live in Home Assistant's label registry and names in
+# its entity aliases, but a corrected device kind has nowhere native to go.
+DATA_DEVICE_KINDS = "device_kinds"
 ATTR_WEEKDAYS = "weekdays"
 ATTR_ENABLED = "enabled"
 ATTR_SCHEDULE_ID = "schedule_id"

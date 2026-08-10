@@ -9,6 +9,14 @@ from homeassistant.core import callback
 from homeassistant.components.websocket_api import decorators, async_register_command
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from . import const
+from .device_book import (
+    KINDS,
+    async_get_book,
+    async_name_device,
+    async_remove_group,
+    async_set_group,
+    async_set_kind,
+)
 from .store import ScheduleEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,6 +100,39 @@ def websocket_get_schedule_item(hass, connection, msg):
     item = msg[const.ATTR_SCHEDULE_ID]
     data = coordinator.async_get_schedule(item)
     connection.send_result(msg["id"], data)
+
+
+@callback
+def websocket_get_device_book(hass, connection, msg):
+    """The household's own names and groupings."""
+    connection.send_result(msg["id"], {**async_get_book(hass), "kinds": sorted(KINDS)})
+
+
+@decorators.async_response
+async def websocket_set_device_group(hass, connection, msg):
+    """Make a group hold exactly these devices; an empty list removes it."""
+    devices = msg.get("devices") or []
+    if devices:
+        await async_set_group(hass, msg["group"], devices)
+    else:
+        await async_remove_group(hass, msg["group"])
+    connection.send_result(msg["id"], async_get_book(hass))
+
+
+@decorators.async_response
+async def websocket_name_device(hass, connection, msg):
+    """Give a device the name a schedule should call it by, and what it really is."""
+    try:
+        if "name" in msg:
+            await async_name_device(hass, msg["entity_id"], msg["name"] or None)
+        if "kind" in msg:
+            async_set_kind(hass, msg["entity_id"], msg["kind"] or None)
+            coordinator = hass.data[const.DOMAIN]["coordinator"]
+            coordinator.store.async_set_device_kind(msg["entity_id"], msg["kind"] or None)
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_device", str(err))
+        return
+    connection.send_result(msg["id"], async_get_book(hass))
 
 
 @callback
@@ -264,6 +305,43 @@ async def async_register_websockets(hass):
         websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
             {
                 vol.Required("type"): "{}/tags".format(const.DOMAIN),
+            }
+        ),
+    )
+
+    # the device book: the household's own names and groupings
+    websocket_api.async_register_command(
+        hass,
+        "{}/device_book".format(const.DOMAIN),
+        websocket_get_device_book,
+        websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+            {vol.Required("type"): "{}/device_book".format(const.DOMAIN)}
+        ),
+    )
+
+    websocket_api.async_register_command(
+        hass,
+        "{}/device_book/group".format(const.DOMAIN),
+        websocket_set_device_group,
+        websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+            {
+                vol.Required("type"): "{}/device_book/group".format(const.DOMAIN),
+                vol.Required("group"): cv.string,
+                vol.Required("devices"): [cv.string],
+            }
+        ),
+    )
+
+    websocket_api.async_register_command(
+        hass,
+        "{}/device_book/device".format(const.DOMAIN),
+        websocket_name_device,
+        websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+            {
+                vol.Required("type"): "{}/device_book/device".format(const.DOMAIN),
+                vol.Required("entity_id"): cv.entity_id,
+                vol.Optional("name"): vol.Any(cv.string, None),
+                vol.Optional("kind"): vol.Any(vol.In(sorted(KINDS)), None),
             }
         ),
     )

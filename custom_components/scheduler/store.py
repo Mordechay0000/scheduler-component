@@ -199,6 +199,10 @@ class ScheduleStorage:
         self.hass = hass
         self.schedules: MutableMapping[str, ScheduleEntry] = {}
         self.tags: MutableMapping[str, TagEntry] = {}
+        # entity_id -> what the device really is, when Home Assistant has the
+        # domain wrong. Groups and names live in Home Assistant's own
+        # registries; this is the one piece with nowhere native to go.
+        self.device_kinds: MutableMapping[str, str] = {}
         self.time_shutdown = None
         self._store = MigratableStore(hass, STORAGE_VERSION, STORAGE_KEY)
 
@@ -230,6 +234,9 @@ class ScheduleStorage:
                         name=entry[ATTR_NAME],
                         schedules=entry[const.ATTR_SCHEDULES],
                     )
+
+            if "device_kinds" in data:
+                self.device_kinds = dict(data["device_kinds"])
 
             if "time_shutdown" in data:
                 self.time_shutdown = data["time_shutdown"]
@@ -292,16 +299,29 @@ class ScheduleStorage:
 
         store_data["tags"] = [attr.asdict(entry) for entry in self.tags.values()]
 
+        if self.device_kinds:
+            store_data["device_kinds"] = dict(self.device_kinds)
+
         if self.time_shutdown:
             store_data["time_shutdown"] = self.time_shutdown
 
         return store_data
+
+    @callback
+    def async_set_device_kind(self, entity_id: str, kind: str | None) -> None:
+        """Record, or forget, a correction to what a device is."""
+        if kind is None:
+            self.device_kinds.pop(entity_id, None)
+        else:
+            self.device_kinds[entity_id] = kind
+        self.async_schedule_save()
 
     async def async_delete(self):
         """Delete config."""
         _LOGGER.warning("Removing scheduler configuration data!")
         self.schedules = {}
         self.tags = {}
+        self.device_kinds = {}
         await self._store.async_remove()
 
     @callback

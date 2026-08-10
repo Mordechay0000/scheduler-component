@@ -61,7 +61,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     )
 
     hass.data.setdefault(const.DOMAIN, {})
-    hass.data[const.DOMAIN] = {"coordinator": coordinator, "schedules": {}}
+    hass.data[const.DOMAIN] = {
+        "coordinator": coordinator,
+        "schedules": {},
+        # the same dict the store holds, so a correction is saved with it
+        const.DATA_DEVICE_KINDS: store.device_kinds,
+    }
 
     # Home Assistant serves every registered LLM API over its own MCP Server
     # integration, and offers it to Assist, so shipping a second server would

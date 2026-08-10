@@ -55,6 +55,10 @@ class FakeCoordinator:
     def __init__(self):
         self.schedules = []
         self.writes = []
+        self.kinds = {}
+        self.store = SimpleNamespace(
+            async_set_device_kind=lambda entity_id, kind: self.kinds.__setitem__(entity_id, kind)
+        )
 
     def async_get_schedules(self):
         return list(self.schedules)
@@ -537,3 +541,103 @@ def test_adding_an_exception_hands_back_the_report_too(hass, coordinator):
 def test_the_prompt_tells_the_model_to_preview_first():
     assert "preview before saving" in API_PROMPT
     assert "read the report back" in API_PROMPT
+
+
+# --- the household's own names ----------------------------------------------
+
+
+@pytest.fixture
+def with_book(hass, coordinator, monkeypatch):
+    """A book with one group and one named device."""
+    import asyncio
+
+    import scheduler.device_book as book_module
+    from test_device_book import FakeEntityRegistry, FakeLabelRegistry
+
+    labels = FakeLabelRegistry()
+    entities = FakeEntityRegistry(["light.salon", "switch.plata", "sensor.temperature"])
+    monkeypatch.setattr(book_module.lr, "async_get", lambda _hass: labels)
+    monkeypatch.setattr(book_module.er, "async_get", lambda _hass: entities)
+    hass.data[const.DOMAIN][const.DATA_DEVICE_KINDS] = {}
+
+    asyncio.run(book_module.async_set_group(hass, "מטבח", ["switch.plata"]))
+    asyncio.run(book_module.async_name_device(hass, "switch.plata", "פלטה של שבת"))
+    return SimpleNamespace(labels=labels, entities=entities)
+
+
+def test_the_book_is_readable(hass, with_book):
+    from scheduler.llm_api import GetDeviceBookTool
+
+    result = call(GetDeviceBookTool, hass)
+
+    assert result["groups"][0]["name"] == "מטבח"
+    assert result["devices"][0]["name"] == "פלטה של שבת"
+    assert "in place of an entity id" in result["note"]
+
+
+def test_a_group_can_be_made_from_names(hass, with_book):
+    from scheduler.llm_api import SetDeviceGroupTool
+
+    result = call(SetDeviceGroupTool, hass, group="הכל", devices=["פלטה של שבת", "light.salon"])
+
+    assert result["ok"]
+    assert sorted(result["devices"]) == ["light.salon", "switch.plata"]
+
+
+def test_a_group_of_something_that_does_not_exist_is_refused(hass, with_book):
+    from scheduler.llm_api import SetDeviceGroupTool
+
+    result = call(SetDeviceGroupTool, hass, group="x", devices=["light.nowhere"])
+
+    assert result["ok"] is False
+    assert "list_devices" in result["error"]
+
+
+def test_a_plan_can_name_a_group_instead_of_entity_ids(hass, with_book):
+    """The whole point of the book: a plan in the household's own words."""
+    result = call(SavePlanTool, hass, plan={
+        "name": "Shabbat",
+        "groups": [{"name": "home", "devices": ["מטבח"], "cubes": [
+            {"name": "n", "from": "candle_lighting", "to": "havdalah"}]}],
+    })
+
+    assert result["ok"]
+    slots = hass.data[const.DOMAIN]["coordinator"].writes[-1][1][const.ATTR_TIMESLOTS]
+    assert [a["entity_id"] for a in slots[0][const.ATTR_ACTIONS]] == ["switch.plata"]
+
+
+def test_an_exception_can_name_a_device(hass, with_book):
+    call(SavePlanTool, hass, plan={
+        "name": "Shabbat",
+        "groups": [{"name": "home", "devices": ["מטבח", "light.salon"], "cubes": [
+            {"name": "n", "from": "candle_lighting", "to": "havdalah"}]}],
+        "exceptions": [{"device": "פלטה של שבת", "from": "havdalah@11:30", "to": "havdalah@13:00"}],
+    })
+
+    slots = hass.data[const.DOMAIN]["coordinator"].writes[-1][1][const.ATTR_TIMESLOTS]
+    detach = next(s for s in slots if s[const.ATTR_TRACK].startswith("detach:"))
+    assert detach[const.ATTR_ACTIONS][0]["entity_id"] == "switch.plata"
+
+
+def test_a_device_can_be_named_and_put_right(hass, with_book):
+    from scheduler.llm_api import NameDeviceTool
+
+    result = call(NameDeviceTool, hass, device="light.salon", name="מזגן סלון", kind="climate")
+
+    assert result["ok"]
+    assert result["device"]["name"] == "מזגן סלון"
+    assert result["device"]["kind"] == "climate"
+
+
+def test_naming_a_device_that_is_not_here_says_so(hass, with_book):
+    from scheduler.llm_api import NameDeviceTool
+
+    result = call(NameDeviceTool, hass, device="light.nowhere", name="x")
+
+    assert result["ok"] is False
+    assert "list_devices" in result["error"]
+
+
+def test_the_prompt_points_at_the_book_first():
+    assert "scheduler_get_device_book" in API_PROMPT
+    assert "instead of an entity id" in API_PROMPT
