@@ -218,12 +218,15 @@ async def async_unload_entry(hass, entry):
             *[hass.config_entries.async_forward_entry_unload(entry, PLATFORM)]
         )
     )
-    coordinator = hass.data[const.DOMAIN]["coordinator"]
-    await coordinator.async_unload()
-    async_unregister_frontend(hass)
+    # first, so that a failure below cannot leave the API registered and stop
+    # the next setup with "already registered"
     unregister_llm_api = hass.data.pop(DATA_LLM_API_REGISTERED, None)
     if unregister_llm_api:
         unregister_llm_api()
+
+    coordinator = hass.data[const.DOMAIN]["coordinator"]
+    await coordinator.async_unload()
+    async_unregister_frontend(hass)
     return unload_ok
 
 

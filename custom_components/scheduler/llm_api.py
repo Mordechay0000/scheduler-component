@@ -796,5 +796,27 @@ class ShabbatPlanAPI(llm.API):
 
 @callback
 def async_register_llm_api(hass: HomeAssistant):
-    """Register the API; returns the callback that unregisters it again."""
-    return llm.async_register_api(hass, ShabbatPlanAPI(hass))
+    """Register the API; returns the callback that unregisters it again.
+
+    Registering twice raises, and a config entry can be reloaded - by HACS on
+    an update, or by hand - so any stale registration is cleared first rather
+    than being allowed to stop the whole integration from setting up.
+    """
+    existing = llm.async_get_apis(hass)
+    if any(api.id == API_ID for api in existing):
+        _LOGGER.debug("Replacing an existing registration of %s", API_ID)
+        for api in existing:
+            if api.id == API_ID:
+                llm._async_get_apis(hass).pop(API_ID, None)
+                break
+
+    unregister = llm.async_register_api(hass, ShabbatPlanAPI(hass))
+    _LOGGER.info(
+        "Registered the '%s' LLM API (id %s). It is offered by the Model Context "
+        "Protocol Server integration and in any conversation agent's options; over "
+        "MCP it is served at /api/mcp/%s.",
+        API_NAME,
+        API_ID,
+        API_ID,
+    )
+    return unregister

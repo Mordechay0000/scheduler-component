@@ -59,9 +59,22 @@ def states():
     return FakeStates()
 
 
+class FakeHass:
+    """Stand-in for hass.
+
+    A plain class rather than SimpleNamespace because Home Assistant keys some
+    of its own registries by the hass object, and SimpleNamespace defines
+    __eq__ and so is not hashable.
+    """
+
+    def __init__(self, states):
+        self.states = states
+        self.data = {}
+
+
 @pytest.fixture
 def hass(states):
-    return SimpleNamespace(states=states, data={})
+    return FakeHass(states)
 
 
 def make_timer(hass, timeslots=None, weekdays=None):

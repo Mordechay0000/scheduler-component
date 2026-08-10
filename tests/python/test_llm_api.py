@@ -641,3 +641,43 @@ def test_naming_a_device_that_is_not_here_says_so(hass, with_book):
 def test_the_prompt_points_at_the_book_first():
     assert "scheduler_get_device_book" in API_PROMPT
     assert "instead of an entity id" in API_PROMPT
+
+
+# --- being registered at all ------------------------------------------------
+#
+# The API is only useful if Home Assistant can find it. Registering twice
+# raises, and a config entry gets reloaded whenever the integration is updated,
+# so this is the failure that would leave "Shabbat plans" missing from the list.
+
+
+def test_registering_puts_it_where_home_assistant_looks(hass):
+    from homeassistant.helpers import llm
+
+    from scheduler.llm_api import async_register_llm_api
+
+    unregister = async_register_llm_api(hass)
+
+    assert any(api.id == API_ID for api in llm.async_get_apis(hass))
+    unregister()
+    assert not any(api.id == API_ID for api in llm.async_get_apis(hass))
+
+
+def test_registering_again_replaces_rather_than_raising(hass):
+    """A reload must not be able to leave the integration unable to set up."""
+    from homeassistant.helpers import llm
+
+    from scheduler.llm_api import async_register_llm_api
+
+    async_register_llm_api(hass)
+    async_register_llm_api(hass)  # as if the entry reloaded without unloading
+
+    assert len([api for api in llm.async_get_apis(hass) if api.id == API_ID]) == 1
+
+
+def test_the_api_instance_carries_every_tool(hass):
+    from scheduler.llm_api import ShabbatPlanAPI
+
+    instance = asyncio.run(ShabbatPlanAPI(hass).async_get_api_instance(None))
+
+    assert {tool.name for tool in instance.tools} == {t.name for t in TOOLS}
+    assert instance.api_prompt.strip()
