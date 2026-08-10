@@ -578,3 +578,86 @@ def test_a_bad_time_says_which_stretch_it_was_in():
         )
     assert "group 'home', stretch 'night'" in str(err.value)
     assert "'from'" in str(err.value)
+
+
+# --- reading the day back before it happens ---------------------------------
+#
+# A plan is easy to write and hard to check: what a device does at four in the
+# afternoon is spread over a stretch, an override inside it and possibly an
+# exception on top. The report is what makes that answerable before Shabbat
+# rather than during it.
+
+
+def test_the_report_says_what_each_device_does_in_each_stretch():
+    from scheduler.plan_model import describe_plan
+
+    report = describe_plan(plan_with_override())
+    stretch = report["groups"][0]["stretches"][0]
+
+    by_device = {d["device"]: d for d in stretch["devices"]}
+    assert by_device["light.salon"]["state"] == "on"
+    assert by_device["light.salon"]["why"] == "group"
+    assert by_device["switch.plata"]["state"] == "off"
+    assert by_device["switch.plata"]["why"] == "override"
+
+
+def test_the_report_puts_the_boundaries_in_words():
+    from scheduler.plan_model import describe_plan
+
+    stretch = describe_plan(worked_plan())["groups"][0]["stretches"][1]
+
+    assert stretch["from_means"] == "22:30 on the day of candle_lighting"
+    assert stretch["to_means"] == "06:30 on the day of havdalah"
+
+
+def test_the_report_names_the_band_and_says_it_covers_yom_tov():
+    from scheduler.plan_model import describe_plan
+
+    band = describe_plan(worked_plan())["band"]
+
+    assert band["opens"] == CANDLE
+    assert "Yom Tov" in band["means"]
+
+
+def test_the_report_flags_where_an_exception_takes_over():
+    from scheduler.plan_model import describe_plan
+
+    report = describe_plan(worked_plan())
+    devices = report["groups"][0]["stretches"][2]["devices"]
+    plata = next(d for d in devices if d["device"] == "switch.plata")
+
+    assert "takes it over" in plata.get("but", "")
+    assert report["exceptions"][0]["device"] == "switch.plata"
+
+
+def test_the_report_carries_the_warnings_with_it():
+    from scheduler.plan_model import describe_plan
+
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{"name": "home", "devices": ["light.a"], "cubes": [
+            {"name": "n", "from": "candle_lighting", "to": "22:30", "state": "off"}]}],
+    })
+    assert any("every day of the week" in note for note in describe_plan(plan)["warnings"])
+
+
+def test_the_report_refuses_a_plan_that_would_not_work():
+    from scheduler.plan_model import describe_plan
+
+    with pytest.raises(PlanError):
+        describe_plan(plan_from_dict({"name": "x", "groups": []}))
+
+
+def test_brightness_is_not_sent_to_something_that_is_not_a_light():
+    """switch.turn_on with brightness_pct would simply be rejected."""
+    plan = plan_from_dict({
+        "name": "x",
+        "groups": [{"name": "home", "devices": ["light.salon", "switch.boiler"], "cubes": [
+            {"name": "n", "from": "candle_lighting", "to": "havdalah",
+             "state": "on", "brightness": 60}]}],
+    })
+    by_device = {a["entity_id"]: a["service_data"] for a in
+                 plan_to_payload(plan)["timeslots"][0]["actions"]}
+
+    assert by_device["light.salon"] == {"brightness_pct": 60}
+    assert by_device["switch.boiler"] == {}

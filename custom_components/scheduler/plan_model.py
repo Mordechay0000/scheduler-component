@@ -129,11 +129,20 @@ def _state_of(service: str) -> str:
     return OFF if service.endswith("turn_off") else ON
 
 
+def takes_light_parameters(device: str) -> bool:
+    """Only a light has a brightness and a colour temperature.
+
+    A group can carry them for its lights while also holding a switch; sending
+    brightness_pct to switch.turn_on would just be rejected, so it is left off.
+    """
+    return device.split(".")[0] == "light"
+
+
 def _action_for(device: str, wanted: DeviceState) -> dict[str, Any]:
     """The service call one device gets for one stretch."""
     service_data: dict[str, Any] = {}
-    # brightness and colour only mean anything on the way on
-    if wanted.state == ON:
+    # brightness and colour only mean anything on the way on, and only to a light
+    if wanted.state == ON and takes_light_parameters(device):
         if wanted.brightness is not None:
             service_data["brightness_pct"] = wanted.brightness
         if wanted.kelvin is not None:
@@ -496,6 +505,118 @@ def warnings_for(plan: Plan) -> list[str]:
             "also cover Yom Tov - including a festival running into Shabbat."
         )
     return notes
+
+
+# --- what the day will actually do ------------------------------------------
+#
+# A plan is easy to write and hard to read back: which device is on at four in
+# the afternoon is spread across a group's stretches, an override inside one of
+# them, and possibly an exception on top. This walks it and says so plainly, so
+# it can be checked before saving rather than found out on Shabbat.
+
+
+def _covers(exception: PlanException, cube: Cube) -> bool:
+    """Whether an exception plausibly falls inside a stretch.
+
+    Anchors are not resolved here - there is no clock - so this compares what
+    was written: an exception written against the same anchor as a stretch, at
+    a time between its ends.
+    """
+    def key(expression: str):
+        parsed = parse_time(expression)
+        if parsed.entity is None:
+            return None
+        # a day-anchored time sorts by its own clock reading; an offset sorts
+        # around a nominal anchor time, which is enough to order one band
+        base = 0 if parsed.op == "@" else NOMINAL_ANCHOR_MINUTES
+        minutes = parsed.hours * 60 + parsed.minutes
+        return (parsed.entity, base + (-minutes if parsed.op == "-" else minutes))
+
+    start, stop, at = key(cube.start), key(cube.stop), key(exception.start)
+    if not all((start, stop, at)):
+        return False
+    if at[0] == start[0] and at[1] >= start[1]:
+        return at[0] != stop[0] or at[1] < stop[1]
+    return at[0] == stop[0] and at[1] < stop[1]
+
+
+#: a stand-in time of day for an anchor, used only to order one band's own
+#: boundaries relative to each other
+NOMINAL_ANCHOR_MINUTES = 19 * 60
+
+
+def describe_plan(plan: Plan) -> dict[str, Any]:
+    """A reading of the plan: every stretch, and what each device does in it."""
+    validate(plan)
+
+    groups = []
+    for group in plan.groups:
+        stretches = []
+        for cube in group.cubes:
+            devices = []
+            for device in group.devices:
+                wanted = cube.for_device(device)
+                if not takes_light_parameters(device):
+                    wanted = DeviceState(wanted.state)
+                taken_over = [
+                    exception
+                    for exception in plan.exceptions
+                    if exception.device == device and _covers(exception, cube)
+                ]
+                devices.append(
+                    {
+                        "device": device,
+                        **wanted.as_dict(),
+                        "why": "override" if device in cube.overrides else "group",
+                        **(
+                            {"but": f"'{taken_over[0].name}' takes it over for part of this"}
+                            if taken_over
+                            else {}
+                        ),
+                    }
+                )
+            stretches.append(
+                {
+                    "name": cube.name or "unnamed",
+                    "from": cube.start,
+                    "to": cube.stop,
+                    "from_means": parse_time(cube.start).describe(plan.anchors),
+                    "to_means": parse_time(cube.stop).describe(plan.anchors),
+                    "holds_the_state": cube.enforce,
+                    "devices": devices,
+                }
+            )
+        groups.append({"group": group.name, "stretches": stretches})
+
+    exceptions = [
+        {
+            "device": exception.device,
+            "name": exception.name,
+            "from": exception.start,
+            "to": exception.stop,
+            "from_means": parse_time(exception.start).describe(plan.anchors),
+            "to_means": parse_time(exception.stop).describe(plan.anchors),
+            "state": exception.state,
+            **({"brightness": exception.brightness} if exception.brightness is not None else {}),
+            **({"kelvin": exception.kelvin} if exception.kelvin is not None else {}),
+            **({"only_on": exception.only_on} if exception.only_on else {}),
+            "note": "while this runs its group leaves the device alone; afterwards "
+                    "the group takes it back",
+        }
+        for exception in plan.exceptions
+    ]
+
+    return {
+        "band": {
+            "opens": plan.anchors.get(CANDLE_LIGHTING),
+            "closes": plan.anchors.get(HAVDALAH),
+            "means": "from candle lighting to havdalah, Shabbat or Yom Tov, "
+                     "read from the calendar every week",
+        },
+        "groups": groups,
+        "exceptions": exceptions,
+        "warnings": warnings_for(plan),
+    }
 
 
 # --- the shape the tools speak ----------------------------------------------

@@ -27,6 +27,7 @@ from .plan_model import (
     PLAN_TAG,
     PlanError,
     PlanException,
+    describe_plan,
     plan_from_dict,
     plan_from_schedule,
     plan_to_dict,
@@ -71,11 +72,17 @@ The mistake to avoid: an ordinary clock time inside the band, such as "off at
 day the band opened. A plain "22:30" fires every night of the week. Call
 scheduler_explain_time when unsure.
 
-HOW TO WORK
+HOW TO WORK - in this order
   1. scheduler_list_devices     to find entity ids
-  2. scheduler_get_plan         to see what exists
-  3. scheduler_save_plan        to write the whole plan in one call
-  4. scheduler_add_exception / scheduler_remove_exception for one device
+  2. scheduler_get_plan         to see what exists already
+  3. scheduler_preview_plan     to check a plan WITHOUT saving it, and to show
+                                the person what it will do
+  4. scheduler_save_plan        to write the whole plan in one call
+  5. scheduler_add_exception / scheduler_remove_exception for one device
+
+Always preview before saving anything the person has not already seen, and
+read the report back to them. Every write returns the same report, so say what
+was saved rather than only that it was saved.
 
 scheduler_save_plan replaces the plan entirely, in a single write, so send the
 whole plan every time. To change one thing: get the plan, edit what came back,
@@ -386,6 +393,21 @@ class DescribeAnchorsTool(_SchedulerTool):
         return result
 
 
+class PreviewPlanTool(_SchedulerTool):
+    name = f"{const.DOMAIN}_preview_plan"
+    description = (
+        "Read a plan back as what it will actually do, without saving anything: every "
+        "stretch, and what each device does in it, with the boundaries written out in "
+        f"words. Call this before {const.DOMAIN}_save_plan to check a plan, and show "
+        "the result to the person - it is far easier to spot a mistake here than on "
+        "Shabbat."
+    )
+    parameters = vol.Schema({vol.Required("plan"): PLAN_SCHEMA})
+
+    async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
+        return {"ok": True, "saved": False, "report": describe_plan(plan_from_dict(args["plan"]))}
+
+
 class GetPlanTool(_SchedulerTool):
     name = f"{const.DOMAIN}_get_plan"
     description = (
@@ -435,6 +457,8 @@ class SavePlanTool(_SchedulerTool):
             "action": "updated" if schedule_id else "created",
             "stretches": len(payload[const.ATTR_TIMESLOTS]),
             "warnings": warnings_for(plan),
+            # what was just saved, in words, so it can be read back to the person
+            "report": describe_plan(plan),
             "plan": plan_to_dict(plan),
         }
 
@@ -472,7 +496,12 @@ class AddExceptionTool(_SchedulerTool):
 
         payload = plan_to_payload(plan)
         _write(hass, payload, schedule[const.ATTR_SCHEDULE_ID])
-        return {"ok": True, "plan": plan_to_dict(plan), "warnings": warnings_for(plan)}
+        return {
+            "ok": True,
+            "plan": plan_to_dict(plan),
+            "warnings": warnings_for(plan),
+            "report": describe_plan(plan),
+        }
 
 
 class RemoveExceptionTool(_SchedulerTool):
@@ -547,6 +576,7 @@ TOOLS: list[type[_SchedulerTool]] = [
     ExplainTimeTool,
     DescribeAnchorsTool,
     GetPlanTool,
+    PreviewPlanTool,
     SavePlanTool,
     AddExceptionTool,
     RemoveExceptionTool,

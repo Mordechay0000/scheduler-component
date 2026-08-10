@@ -491,3 +491,49 @@ def test_a_tool_that_breaks_reports_instead_of_raising(hass, coordinator, monkey
 
     assert result["ok"] is False
     assert "Home Assistant log" in result["error"]
+
+
+# --- checking a plan before it is real --------------------------------------
+
+
+def test_preview_says_what_a_plan_will_do_without_saving_it(hass, coordinator):
+    from scheduler.llm_api import PreviewPlanTool
+
+    result = call(PreviewPlanTool, hass, plan=WORKED)
+
+    assert result["ok"] and result["saved"] is False
+    assert coordinator.writes == []
+    stretches = result["report"]["groups"][0]["stretches"]
+    assert [s["name"] for s in stretches] == ["coming in", "night", "morning"]
+    assert stretches[1]["from_means"] == "22:30 on the day of candle_lighting"
+
+
+def test_preview_refuses_a_broken_plan_with_advice(hass, coordinator):
+    from scheduler.llm_api import PreviewPlanTool
+
+    result = call(PreviewPlanTool, hass, plan={"name": "x", "groups": []})
+
+    assert result["ok"] is False
+    assert "at least one group" in result["error"]
+
+
+def test_saving_hands_back_the_same_report(hass, coordinator):
+    result = call(SavePlanTool, hass, plan=WORKED)
+
+    assert "report" in result
+    assert result["report"]["groups"][0]["stretches"][0]["devices"]
+
+
+def test_adding_an_exception_hands_back_the_report_too(hass, coordinator):
+    coordinator.schedules.append(stored_plan())
+    result = call(
+        AddExceptionTool, hass, device="switch.plata",
+        **{"from": "havdalah@11:30", "to": "havdalah@13:00"},
+    )
+
+    assert result["report"]["exceptions"][0]["device"] == "switch.plata"
+
+
+def test_the_prompt_tells_the_model_to_preview_first():
+    assert "preview before saving" in API_PROMPT
+    assert "read the report back" in API_PROMPT
