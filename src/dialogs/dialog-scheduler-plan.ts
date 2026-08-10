@@ -1,9 +1,13 @@
 import {
   mdiCallSplit,
+  mdiClipboardTextClockOutline,
   mdiClose,
   mdiHelpCircleOutline,
+  mdiKeyboardOutline,
   mdiPlus,
+  mdiRedoVariant,
   mdiTrashCanOutline,
+  mdiUndo,
   mdiUndoVariant,
   mdiWizardHat,
 } from "@mdi/js";
@@ -23,6 +27,7 @@ import { isOffAction, invertOnOffAction } from "../data/format/is_off_action";
 import { computeActionColor } from "../data/format/compute_action_color";
 import { computeEntity } from "../lib/entity";
 import { resolveBoundary } from "../data/plan/resolve_boundary";
+import { PlanReport, describePlan } from "../data/plan/describe_plan";
 import {
   DEFAULT_END_ANCHOR,
   DEFAULT_START_ANCHOR,
@@ -111,7 +116,20 @@ const MOMENT_PRESETS: { key: string; when: WizardWhen; time: string; on: boolean
 const SNAP_MINUTES = 5;
 
 /** the swatches offered for a stretch, on top of "let the action decide" */
-const PALETTE = ['#43a047', '#1e88e5', '#8e24aa', '#f4511e', '#00897b', '#6d4c41'];
+const PALETTE = [
+  '#43a047', // green
+  '#7cb342', // lime
+  '#fdd835', // yellow
+  '#fb8c00', // amber
+  '#f4511e', // orange
+  '#e53935', // red
+  '#d81b60', // pink
+  '#8e24aa', // purple
+  '#3949ab', // indigo
+  '#1e88e5', // blue
+  '#00897b', // teal
+  '#6d4c41', // brown
+];
 
 const emptySchedule = (): Schedule => ({
   entries: [{ weekdays: [TWeekday.Daily], slots: [] }],
@@ -149,6 +167,13 @@ export class DialogSchedulerPlan extends LitElement {
     moments: [],
   };
 
+  @state() private _history: Plan[] = [];
+  @state() private _future: Plan[] = [];
+  @state() private _keys = false;
+  @state() private _report: PlanReport | null = null;
+  @state() private _saved = false;
+
+  private _lastChange?: string;
   private _base: Schedule = emptySchedule();
   private _drag: { row: string; index: number; track: HTMLElement } | null = null;
 
@@ -160,6 +185,11 @@ export class DialogSchedulerPlan extends LitElement {
     this._error = null;
     this._help = false;
     this._wizardStep = null;
+    this._history = [];
+    this._future = [];
+    this._report = null;
+    this._saved = false;
+    this._keys = false;
     // a brand new plan is where the step-by-step path is worth offering
     this._offerWizard = !params.schedule;
     await this.updateComplete;
@@ -196,28 +226,200 @@ export class DialogSchedulerPlan extends LitElement {
 
   // --- keyboard, the same shortcuts the ordinary editor uses ---------------
 
-  private _handleKeyDown = (ev: KeyboardEvent) => {
-    if (!this._params || this._wizardStep !== null) return;
+  /**
+   * Everything the editor can do, from the keyboard.
+   *
+   * Undo and redo work while typing in a field too - they are the one pair
+   * people reach for mid-edit - but nothing else steals a key from an input.
+   */
+  private _handleKeyDown = async (ev: KeyboardEvent) => {
+    if (!this._params) return;
     const origin = ev.composedPath()[0];
-    // never take Delete away from a field somebody is typing in
-    if (origin instanceof HTMLElement
-      && (['input', 'textarea', 'select'].includes(origin.tagName.toLowerCase()) || origin.isContentEditable)) {
+    const typing = origin instanceof HTMLElement
+      && (['input', 'textarea', 'select'].includes(origin.tagName.toLowerCase())
+        || origin.isContentEditable);
+    const meta = ev.ctrlKey || ev.metaKey;
+    const key = ev.key.toLowerCase();
+
+    if (meta && key == 'z' && !ev.shiftKey) {
+      ev.preventDefault();
+      this._undo();
       return;
     }
-    if (ev.key != 'Delete' && ev.key != 'Backspace') return;
+    if (meta && (key == 'y' || (key == 'z' && ev.shiftKey))) {
+      ev.preventDefault();
+      this._redo();
+      return;
+    }
+    if (meta && key == 's') {
+      ev.preventDefault();
+      await this._save();
+      return;
+    }
+
+    if (typing) return;
+    if (this._wizardStep !== null) return;
+
+    if (key == 'escape' && (this._keys || this._report)) {
+      ev.preventDefault();
+      this._keys = false;
+      this._report = null;
+      return;
+    }
+    if (key == '?' || (ev.shiftKey && key == '/')) {
+      ev.preventDefault();
+      this._keys = !this._keys;
+      return;
+    }
 
     const selected = this._selectedCube();
-    if (selected) {
+    const detach = this._selectedDetach();
+
+    switch (key) {
+      case 'delete':
+      case 'backspace':
+        ev.preventDefault();
+        if (selected) this._removeCube(selected.group, selected.cube);
+        else if (detach) this._rejoinGroup(detach.track);
+        return;
+      case 'arrowright':
+      case 'arrowleft':
+        ev.preventDefault();
+        if (ev.shiftKey || ev.altKey) this._nudgeBoundary(key == 'arrowright' ? 1 : -1, ev.altKey);
+        else this._step(key == 'arrowright' ? 1 : -1);
+        return;
+      case 'arrowdown':
+      case 'arrowup':
+        ev.preventDefault();
+        this._stepRow(key == 'arrowdown' ? 1 : -1);
+        return;
+      case 'n':
+      case '+':
+        ev.preventDefault();
+        if (selected) this._splitCube(selected.group, selected.cube);
+        return;
+      case 'o':
+        ev.preventDefault();
+        this._toggleSelectedState();
+        return;
+      case 'h':
+        ev.preventDefault();
+        if (selected) {
+          this._updateCube(selected.group.track, selected.cube.id, {
+            enforce: !selected.cube.enforce,
+          });
+        }
+        return;
+      case 'g':
+        ev.preventDefault();
+        this._addGroup();
+        return;
+      case 'r':
+        ev.preventDefault();
+        this._showReport();
+        return;
+      case 'w':
+        ev.preventDefault();
+        this._wizardStep = 0;
+        return;
+      case 'enter':
+        ev.preventDefault();
+        this._focusName();
+        return;
+      default:
+        break;
+    }
+
+    // 1-9 and 0 pick a colour, 0 being "let the action decide"
+    if (selected && /^[0-9]$/.test(key)) {
       ev.preventDefault();
-      this._removeCube(selected.group, selected.cube);
+      const index = Number(key) - 1;
+      this._updateCube(selected.group.track, selected.cube.id, {
+        color: index < 0 ? undefined : PALETTE[index],
+      });
+    }
+  };
+
+  /** every row in the band, in the order they are drawn */
+  private get _rows(): { track: string; ids: string[] }[] {
+    return [
+      ...this._plan.groups.map(group => ({
+        track: group.track,
+        ids: group.cubes.map(cube => cube.id),
+      })),
+      ...this._plan.detaches.map(detach => ({ track: detach.track, ids: [detach.track] })),
+    ];
+  }
+
+  private _step(direction: 1 | -1) {
+    const row = this._rows.find(r => r.ids.includes(this._selected || ''));
+    if (!row) {
+      this._selected = this._rows[0]?.ids[0] ?? null;
+      return;
+    }
+    const index = row.ids.indexOf(this._selected!);
+    const next = index + direction;
+    if (next >= 0 && next < row.ids.length) this._selected = row.ids[next];
+  }
+
+  private _stepRow(direction: 1 | -1) {
+    const rows = this._rows;
+    const index = rows.findIndex(r => r.ids.includes(this._selected || ''));
+    const next = rows[Math.min(rows.length - 1, Math.max(0, index + direction))];
+    if (next) this._selected = next.ids[0];
+  }
+
+  /** shift/alt with the arrows walks a boundary five minutes at a time */
+  private _nudgeBoundary(direction: 1 | -1, stop: boolean) {
+    const selected = this._selectedCube();
+    if (!selected) return;
+    const { group, cube } = selected;
+    const index = group.cubes.findIndex(c => c.id == cube.id);
+    const boundary = stop ? index + 1 : index;
+    const value = stop ? cube.stop : cube.start;
+    const moment = this._moment(value);
+    if (!moment) return;
+
+    const moved = new Date(moment.getTime() + direction * SNAP_MINUTES * 60000);
+    if (boundary > 0 && boundary < group.cubes.length) {
+      this._moveBoundary(group.track, boundary, this._boundaryFromDate(moved), 'nudge');
+      return;
+    }
+    // the very ends of the row have no neighbour to hand over to
+    const cubes = group.cubes.map(c =>
+      c.id != cube.id ? c : { ...c, [stop ? 'stop' : 'start']: this._boundaryFromDate(moved) }
+    );
+    this._setCubes(group.track, cubes, 'nudge');
+  }
+
+  private _toggleSelectedState() {
+    const selected = this._selectedCube();
+    if (selected) {
+      this._updateCube(selected.group.track, selected.cube.id, {
+        action: this._invert(selected.cube),
+      });
       return;
     }
     const detach = this._selectedDetach();
     if (detach) {
-      ev.preventDefault();
-      this._rejoinGroup(detach.track);
+      const domain = detach.action.service.split('.')[0];
+      const turning = isOffAction(detach.action) ? 'turn_on' : 'turn_off';
+      this._updateDetach(detach.track, {
+        action: { ...detach.action, service: `${domain}.${turning}` },
+      });
     }
-  };
+  }
+
+  private async _focusName() {
+    await this.updateComplete;
+    const field = this.shadowRoot?.querySelector('.cube-title') as HTMLInputElement | null;
+    field?.focus();
+    field?.select();
+  }
+
+  private _showReport() {
+    this._report = describePlan(this._plan, this.hass);
+  }
 
   // --- the band -----------------------------------------------------------
 
@@ -389,7 +591,12 @@ export class DialogSchedulerPlan extends LitElement {
     if (!this._drag) return;
     const when = this._dateFromPointer(this._drag.track, ev.clientX);
     if (!when) return;
-    this._moveBoundary(this._drag.row, this._drag.index, this._boundaryFromDate(when));
+    this._moveBoundary(
+      this._drag.row,
+      this._drag.index,
+      this._boundaryFromDate(when),
+      `drag:${this._drag.row}:${this._drag.index}`
+    );
   }
 
   private _handleDragEnd() {
@@ -397,32 +604,100 @@ export class DialogSchedulerPlan extends LitElement {
   }
 
   /** boundary `index` is the start of cube `index` and the stop of the one before */
-  private _moveBoundary(track: string, index: number, value: string) {
+  private _moveBoundary(track: string, index: number, value: string, coalesce?: string) {
     const group = this._plan.groups.find(g => g.track == track);
-    if (!group) return;
-
-    const when = this._moment(value);
-    const before = index > 0 ? this._moment(group.cubes[index - 1].start) : null;
-    const after = index < group.cubes.length ? this._moment(group.cubes[index].stop) : null;
-    const gap = SNAP_MINUTES * 60000;
-    if (!when) return;
-    if (before && when.getTime() <= before.getTime() + gap) return;
-    if (after && when.getTime() >= after.getTime() - gap) return;
+    if (!group || !this._moment(value)) return;
 
     const cubes = group.cubes.map((cube, i) => {
       if (i == index) return { ...cube, start: value };
       if (i == index - 1) return { ...cube, stop: value };
       return cube;
     });
-    this._updatePlan({
-      groups: this._plan.groups.map(g => (g.track == track ? { ...g, cubes } : g)),
+    this._setCubes(track, cubes, coalesce);
+  }
+
+  private _setCubes(track: string, cubes: PlanCube[], coalesce?: string) {
+    this._updatePlan(
+      {
+        groups: this._plan.groups.map(g =>
+          g.track == track ? { ...g, cubes: this._resolveOverlaps(cubes) } : g
+        ),
+      },
+      coalesce
+    );
+    this._keepSelectionValid();
+  }
+
+  /**
+   * Keep a row a single unbroken line of stretches.
+   *
+   * Two stretches covering the same moment would both act on the same devices,
+   * and which one won would come down to the order they happened to be stored
+   * in. So a boundary pushed past its neighbour shortens that neighbour, and
+   * one pushed clean past its far end absorbs it - which is what dragging over
+   * something small looks like it should do anyway.
+   */
+  private _resolveOverlaps(cubes: PlanCube[]): PlanCube[] {
+    const minimum = SNAP_MINUTES * 60000;
+    const at = (value: string) => this._moment(value)?.getTime() ?? null;
+
+    let out = cubes.filter(cube => {
+      const from = at(cube.start);
+      const to = at(cube.stop);
+      // a stretch with no length left has been absorbed by its neighbour
+      return from === null || to === null || to - from >= minimum;
     });
+    if (!out.length) return cubes.slice(0, 1);
+
+    // each stretch runs up to the next one's start, so no moment is claimed twice
+    out = out.map((cube, index) =>
+      index < out.length - 1 ? { ...cube, stop: out[index + 1].start } : cube
+    );
+    return out;
   }
 
   // --- editing -------------------------------------------------------------
 
-  private _updatePlan(plan: Partial<Plan>) {
-    this._plan = { ...this._plan, ...plan };
+  /**
+   * Every change goes through here, so undo is simply the plan as it was.
+   *
+   * `coalesce` keeps a drag from filling the history with one entry per pixel:
+   * consecutive changes carrying the same label collapse into the one before
+   * them, so a drag undoes as a single move.
+   */
+  private _updatePlan(plan: Partial<Plan>, coalesce?: string) {
+    const previous = this._plan;
+    const merge = coalesce !== undefined && coalesce === this._lastChange;
+    if (!merge) this._history = [...this._history.slice(-49), previous];
+    this._lastChange = coalesce;
+    this._future = [];
+    this._plan = { ...previous, ...plan };
+  }
+
+  private _undo() {
+    if (!this._history.length) return;
+    const previous = this._history[this._history.length - 1];
+    this._history = this._history.slice(0, -1);
+    this._future = [...this._future, this._plan];
+    this._plan = previous;
+    this._lastChange = undefined;
+    this._keepSelectionValid();
+  }
+
+  private _redo() {
+    if (!this._future.length) return;
+    const next = this._future[this._future.length - 1];
+    this._future = this._future.slice(0, -1);
+    this._history = [...this._history, this._plan];
+    this._plan = next;
+    this._lastChange = undefined;
+    this._keepSelectionValid();
+  }
+
+  /** after an undo the selected stretch may no longer exist */
+  private _keepSelectionValid() {
+    if (this._selectedCube() || this._selectedDetach()) return;
+    this._selected = this._plan.groups[0]?.cubes[0]?.id ?? null;
   }
 
   private _updateCube(groupTrackId: string, cubeId: string, changes: Partial<PlanCube>) {
@@ -496,9 +771,7 @@ export class DialogSchedulerPlan extends LitElement {
     };
     const cubes = [...group.cubes];
     cubes.splice(index, 1, { ...cube, stop: boundary }, second);
-    this._updatePlan({
-      groups: this._plan.groups.map(g => (g.track == group.track ? { ...g, cubes } : g)),
-    });
+    this._setCubes(group.track, cubes);
     this._selected = second.id;
   }
 
@@ -516,10 +789,8 @@ export class DialogSchedulerPlan extends LitElement {
     // stays continuous
     if (index > 0) cubes[index - 1] = { ...cubes[index - 1], stop: cube.stop };
     else cubes[0] = { ...cubes[0], start: cube.start };
-    this._updatePlan({
-      groups: this._plan.groups.map(g => (g.track == group.track ? { ...g, cubes } : g)),
-    });
     this._selected = cubes[Math.max(0, index - 1)].id;
+    this._setCubes(group.track, cubes);
   }
 
   private _detachDevice(group: PlanGroup, entity: string) {
@@ -578,7 +849,9 @@ export class DialogSchedulerPlan extends LitElement {
       } else {
         await saveSchedule(this.hass, schedule);
       }
-      this.closeDialog();
+      this._saved = true;
+      // what was just saved, in words, so it can be checked rather than assumed
+      this._showReport();
     } catch (e) {
       this._reportError(e);
     }
@@ -637,6 +910,8 @@ export class DialogSchedulerPlan extends LitElement {
       ${this._renderHeader()}
       ${this._offerWizard ? this._renderWizardOffer() : nothing}
       ${this._help ? this._renderHelp() : nothing}
+      ${this._keys ? this._renderKeys() : nothing}
+      ${this._report ? this._renderReport(this._report) : nothing}
       ${this._bandStart && this._bandEnd ? this._renderBand() : this._renderMissingAnchors()}
       ${this._renderInspector()}
     `;
@@ -658,6 +933,26 @@ export class DialogSchedulerPlan extends LitElement {
             @click=${() => { this._help = !this._help; }}
           >
             <ha-svg-icon .path=${mdiHelpCircleOutline}></ha-svg-icon>
+          </button>
+          <button
+            class="icon-only"
+            title=${this._t('history.undo')}
+            ?disabled=${!this._history.length}
+            @click=${this._undo}
+          ><ha-svg-icon .path=${mdiUndo}></ha-svg-icon></button>
+          <button
+            class="icon-only"
+            title=${this._t('history.redo')}
+            ?disabled=${!this._future.length}
+            @click=${this._redo}
+          ><ha-svg-icon .path=${mdiRedoVariant}></ha-svg-icon></button>
+          <button
+            class="icon-only ${this._keys ? 'active' : ''}"
+            title=${this._t('keys.open')}
+            @click=${() => { this._keys = !this._keys; }}
+          ><ha-svg-icon .path=${mdiKeyboardOutline}></ha-svg-icon></button>
+          <button class="ghost" @click=${this._showReport}>
+            <ha-svg-icon .path=${mdiClipboardTextClockOutline}></ha-svg-icon>${this._t('report.open')}
           </button>
           <button class="ghost" @click=${() => { this._wizardStep = 0; }}>
             <ha-svg-icon .path=${mdiWizardHat}></ha-svg-icon>${this._t('wizard.open')}
@@ -697,6 +992,96 @@ export class DialogSchedulerPlan extends LitElement {
         <p>${this._t('help.rows')}</p>
         <p>${this._t('help.detach')}</p>
         <p>${this._t('help.keys')}</p>
+      </div>
+    `;
+  }
+
+  private _renderKeys() {
+    const keys: [string, string][] = [
+      ['← →', this._t('keys.select')],
+      ['↑ ↓', this._t('keys.row')],
+      ['⇧ ← →', this._t('keys.move_start')],
+      ['⌥ ← →', this._t('keys.move_stop')],
+      ['N', this._t('cube.split')],
+      ['⌫', hassLocalize('ui.common.delete', this.hass)],
+      ['O', this._t('keys.state')],
+      ['H', this._t('enforce.label')],
+      ['1…9 / 0', this._t('keys.colour')],
+      ['G', this._t('group.add')],
+      ['R', this._t('report.open')],
+      ['W', this._t('wizard.open')],
+      ['↵', this._t('keys.rename')],
+      ['⌘Z / Ctrl Z', this._t('history.undo')],
+      ['⌘Y / Ctrl Y', this._t('history.redo')],
+      ['⌘S / Ctrl S', hassLocalize('ui.common.save', this.hass)],
+      ['?', this._t('keys.open')],
+    ];
+    return html`
+      <div class="keys">
+        ${keys.map(([key, what]) => html`
+          <div class="key-row"><kbd>${key}</kbd><span>${what}</span></div>`)}
+      </div>
+    `;
+  }
+
+  /**
+   * The day read back as what will actually happen.
+   *
+   * Shown on demand, before saving and again afterwards - it is much easier to
+   * spot a mistake in a list of "at 22:30 the salon goes off" than in a bar.
+   */
+  private _renderReport(report: PlanReport) {
+    const time = (value: Date | null) =>
+      value
+        ? new Intl.DateTimeFormat(this.hass.locale?.language || 'en', {
+          weekday: 'short', hour: '2-digit', minute: '2-digit',
+        }).format(value)
+        : '—';
+
+    return html`
+      <div class="report">
+        <div class="report-head">
+          <span class="report-title">${this._t('report.title')}</span>
+          <span class="report-band">${time(report.opens)} → ${time(report.closes)}</span>
+          <button class="icon-only" @click=${() => { this._report = null; }}>
+            <ha-svg-icon .path=${mdiClose}></ha-svg-icon>
+          </button>
+        </div>
+
+        ${this._saved ? html`<div class="report-saved">${this._t('report.saved')}</div>` : nothing}
+
+        ${report.problems.length
+        ? html`<div class="report-problem">
+            ${this._t('error.no_entities', '{group}', report.problems.join(', '))}
+          </div>`
+        : nothing}
+
+        <ol class="report-list">
+          ${report.stretches.map(stretch => html`
+          <li>
+            <span class="report-at">${time(stretch.from)}</span>
+            <div class="report-what">
+              <span class="report-name">
+                ${stretch.name}
+                <span class="report-group">${stretch.group}</span>
+                ${stretch.holds ? html`<span class="beta">${this._t('enforce.on')}</span>` : nothing}
+              </span>
+              <div class="report-devices">
+                ${stretch.devices.map(device => html`
+                <span class="report-device ${device.state}">
+                  ${device.name}
+                  <b>${this._t(device.state == 'on' ? 'state.on' : 'state.off')}</b>
+                  ${device.brightness !== undefined ? html`<i>${device.brightness}%</i>` : nothing}
+                  ${device.kelvin !== undefined ? html`<i>${device.kelvin}K</i>` : nothing}
+                  ${device.own ? html`<em>${this._t('report.own')}</em>` : nothing}
+                  ${device.takenOverBy
+            ? html`<em>${this._t('report.taken', '{name}', device.takenOverBy)}</em>`
+            : nothing}
+                </span>`)}
+              </div>
+            </div>
+          </li>`)}
+        </ol>
       </div>
     `;
   }
@@ -1894,7 +2279,115 @@ export class DialogSchedulerPlan extends LitElement {
         color: var(--primary-text-color);
       }
 
-      .swatches { display: flex; gap: 6px; }
+      .swatches { display: flex; flex-wrap: wrap; gap: 6px; max-width: 240px; }
+
+      /* --- shortcuts and the report --- */
+      .keys {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 6px 20px;
+        padding: 14px 16px;
+        border-radius: var(--plan-radius);
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+      }
+      .key-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+      .key-row span { color: var(--secondary-text-color); }
+      kbd {
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        min-width: 62px;
+        text-align: center;
+        padding: 3px 6px;
+        border-radius: 6px;
+        border: 1px solid var(--divider-color);
+        border-bottom-width: 2px;
+        background: rgba(var(--rgb-secondary-text-color, 114, 114, 114), 0.06);
+        color: var(--primary-text-color);
+      }
+
+      .report {
+        border-radius: var(--plan-radius);
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+        overflow: hidden;
+      }
+      .report-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--divider-color);
+      }
+      .report-title { font-size: 15px; font-weight: 600; color: var(--primary-text-color); }
+      .report-band {
+        flex: 1;
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums;
+      }
+      .report-saved {
+        padding: 10px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        color: rgb(var(--plan-on));
+        background: rgba(var(--plan-on), 0.1);
+      }
+      .report-problem {
+        padding: 10px 16px;
+        font-size: 13px;
+        color: var(--error-color, #db4437);
+        background: rgba(219, 68, 55, 0.08);
+      }
+      .report-list { list-style: none; margin: 0; padding: 0; }
+      .report-list li {
+        display: flex;
+        gap: 14px;
+        padding: 10px 16px;
+        border-top: 1px solid var(--divider-color);
+      }
+      .report-list li:first-child { border-top: none; }
+      .report-at {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums;
+        min-width: 96px;
+        padding-top: 2px;
+      }
+      .report-what { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+      .report-name {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--primary-text-color);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .report-group { font-size: 11px; font-weight: 400; color: var(--secondary-text-color); }
+      .report-devices { display: flex; flex-wrap: wrap; gap: 6px; }
+      .report-device {
+        font-size: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: rgba(var(--plan-off), 0.12);
+        color: var(--primary-text-color);
+      }
+      .report-device.on { background: rgba(var(--plan-on), 0.15); }
+      .report-device b { font-weight: 700; }
+      .report-device i { font-style: normal; color: var(--secondary-text-color); }
+      .report-device em {
+        font-style: normal;
+        font-size: 11px;
+        color: rgba(var(--plan-detach), 1);
+        font-weight: 600;
+      }
+      .icon-only[disabled] { opacity: 0.35; cursor: default; }
+
       .swatch {
         width: 26px;
         height: 26px;

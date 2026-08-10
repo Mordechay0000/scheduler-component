@@ -420,6 +420,27 @@
           "on": "Hold",
           "off": "Don't hold",
           "hint": "If a wall switch or another integration changes a device during this stretch, put it back. Waits 30 seconds between attempts so it cannot end up fighting whatever moved it."
+        },
+        "history": {
+          "undo": "Undo",
+          "redo": "Redo"
+        },
+        "keys": {
+          "open": "Keyboard shortcuts",
+          "select": "previous / next stretch",
+          "row": "previous / next row",
+          "move_start": "move its start by 5 minutes",
+          "move_stop": "move its end by 5 minutes",
+          "state": "on / off",
+          "colour": "colour, 0 for automatic",
+          "rename": "rename it"
+        },
+        "report": {
+          "open": "What will happen",
+          "title": "What will happen",
+          "own": "its own",
+          "taken": "until \"{name}\"",
+          "saved": "Saved. This is what it will do."
         }
       }
     }

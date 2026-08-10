@@ -46,6 +46,9 @@ const q = (p, selector) => p.evaluate(
 const count = (p, selector) => p.evaluate(
   s => window.__dialog.shadowRoot.querySelectorAll(s).length, selector);
 
+/** same as count, spelled differently where a local `count` is in the way */
+const count_ = count;
+
 /** Fill the group, press save, and hand back what was POSTed. */
 const saveWith = (p, extra = '') => p.evaluate(async code => {
   const dialog = window.__dialog;
@@ -314,6 +317,169 @@ export default async function run() {
 
     s.ok(call.data.timeslots[0].enforce === true, 'the hold is saved with the stretch');
     s.ok(!call.data.timeslots[1].enforce, 'and only for the stretch it was set on');
+  }, JERUSALEM);
+
+  // --- undo, redo and the keyboard ----------------------------------------
+
+  const press = (p, key, opts = {}) => p.evaluate(([k, o]) => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: k, ...o }));
+    return window.__dialog.updateComplete;
+  }, [key, opts]);
+
+  await withPage(page(), async p => {
+    const names = () => p.evaluate(() => window.__dialog._plan.groups[0].cubes.map(c => c.name));
+
+    const before = await names();
+    await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._updateCube(dialog._plan.groups[0].track, dialog._plan.groups[0].cubes[0].id, { name: 'שונה' });
+      await dialog.updateComplete;
+    });
+    s.ok((await names())[0] === 'שונה', 'an edit lands');
+
+    await press(p, 'z', { ctrlKey: true });
+    s.ok((await names())[0] === before[0], 'ctrl+z puts it back');
+
+    await press(p, 'y', { ctrlKey: true });
+    s.ok((await names())[0] === 'שונה', 'ctrl+y does it again');
+
+    await press(p, 'z', { metaKey: true });
+    await press(p, 'z', { metaKey: true, shiftKey: true });
+    s.ok((await names())[0] === 'שונה', 'and cmd+z / cmd+shift+z do the same on a Mac');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    // a drag is one move, not one per pixel
+    const steps = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const track = dialog._plan.groups[0].track;
+      for (const minutes of [10, 20, 30]) {
+        const when = new Date(dialog._moment(dialog._plan.groups[0].cubes[1].start));
+        when.setMinutes(when.getMinutes() + minutes);
+        dialog._moveBoundary(track, 1, dialog._boundaryFromDate(when), 'drag:x:1');
+      }
+      await dialog.updateComplete;
+      return dialog._history.length;
+    });
+    s.ok(steps === 1, 'a whole drag undoes in one go');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const selected = async () => p.evaluate(() => window.__dialog._selected);
+    await p.evaluate(() => { window.__dialog._selected = window.__dialog._plan.groups[0].cubes[0].id; });
+
+    await press(p, 'ArrowRight');
+    const second = await selected();
+    await press(p, 'ArrowLeft');
+    s.ok(second !== await selected(), 'the arrows walk along the row');
+
+    await press(p, 'o');
+    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].action.service.endsWith('turn_off')),
+      'O flips the state');
+
+    await press(p, 'h');
+    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].enforce === true),
+      'H holds the state');
+
+    await press(p, '3');
+    s.ok(await p.evaluate(() => !!window.__dialog._plan.groups[0].cubes[0].color),
+      'a number picks a colour');
+    await press(p, '0');
+    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes[0].color === undefined),
+      'and 0 hands it back to the action');
+
+    const count = await p.evaluate(() => window.__dialog._plan.groups[0].cubes.length);
+    await press(p, 'n');
+    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes.length) === count + 1,
+      'N splits a stretch');
+    await press(p, 'Delete');
+    s.ok(await p.evaluate(() => window.__dialog._plan.groups[0].cubes.length) === count,
+      'and Delete removes one');
+
+    await press(p, '?');
+    s.ok(await count_(p, '.keys .key-row') > 10, '? brings up the key map');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    s.ok(await count_(p, '.swatches .swatch') === 13,
+      'twelve colours to choose from, plus automatic');
+    const yellow = await p.evaluate(() =>
+      [...window.__dialog.shadowRoot.querySelectorAll('.swatch')]
+        .some(e => e.getAttribute('style') === 'background:#fdd835'));
+    s.ok(yellow, 'yellow among them');
+  }, JERUSALEM);
+
+  // --- stretches cannot cover the same moment ------------------------------
+
+  await withPage(page(), async p => {
+    const dragged = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const group = dialog._plan.groups[0];
+      // drag the second boundary well past the third
+      const target = new Date(dialog._moment(group.cubes[2].stop));
+      target.setMinutes(target.getMinutes() + 30);
+      dialog._moveBoundary(group.track, 1, dialog._boundaryFromDate(target));
+      await dialog.updateComplete;
+      const cubes = dialog._plan.groups[0].cubes;
+      return cubes.map(c => [dialog._moment(c.start)?.getTime(), dialog._moment(c.stop)?.getTime()]);
+    });
+
+    const overlapping = dragged.some(([, stop], i) =>
+      i < dragged.length - 1 && stop > dragged[i + 1][0]);
+    s.ok(!overlapping, 'no two stretches end up covering the same moment');
+    s.ok(dragged.every(([from, to]) => to > from), 'and none is left inside out');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const absorbed = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const group = dialog._plan.groups[0];
+      const before = group.cubes.length;
+      // pull a boundary right over the next stretch's far end
+      const target = new Date(dialog._moment(group.cubes[1].stop));
+      target.setMinutes(target.getMinutes() + 5);
+      dialog._moveBoundary(group.track, 1, dialog._boundaryFromDate(target));
+      await dialog.updateComplete;
+      return { before, after: dialog._plan.groups[0].cubes.length };
+    });
+    s.ok(absorbed.after < absorbed.before,
+      'a stretch dragged over is absorbed rather than left with no length');
+  }, JERUSALEM);
+
+  // --- reading the day back ------------------------------------------------
+
+  await withPage(page(), async p => {
+    await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon', 'switch.plata']);
+      const group = dialog._plan.groups[0];
+      dialog._toggleOverride(group, group.cubes[0], 'switch.plata');
+      dialog._showReport();
+      await dialog.updateComplete;
+    });
+
+    s.ok(await count_(p, '.report-list li') === 5, 'every stretch is listed');
+    const first = await p.evaluate(() =>
+      window.__dialog.shadowRoot.querySelector('.report-list li').textContent.replace(/\s+/g, ' '));
+    s.ok(first.includes('סלון') && first.includes('פלטה'),
+      'each stretch says what every device does');
+    s.ok(first.includes('משלו'), 'and marks the one that is not following its group');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    await p.evaluate(async () => {
+      window.__dialog._showReport();
+      await window.__dialog.updateComplete;
+    });
+    s.ok(await count_(p, '.report-problem') === 1,
+      'a group with no devices is called out before saving');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    await saveWith(p);
+    await p.evaluate(() => window.__dialog.updateComplete);
+    s.ok(await count_(p, '.report-saved') === 1, 'and after saving it says what was saved');
+    s.ok(await count_(p, '.report-list li') > 0, 'with the day laid out');
   }, JERUSALEM);
 
   // --- the wizard is a way in, not the only way ---------------------------
