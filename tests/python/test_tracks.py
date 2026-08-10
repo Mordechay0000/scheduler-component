@@ -101,6 +101,11 @@ def make_entity(timeslots, repeat_type=const.REPEAT_TYPE_REPEAT, end_date=None):
     entity._tags = []
     entity._action_handler = RecordingActionHandler()
     entity._timer_handler = None
+    entity._recovery_timer = None
+    entity._recovery_attempt = 0
+    # the retry ladder has its own tests; these are about which track applies
+    entity.async_start_recovery = lambda: None
+    entity.async_cancel_recovery = lambda: None
     return entity
 
 

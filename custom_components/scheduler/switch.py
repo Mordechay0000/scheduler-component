@@ -12,6 +12,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
     ATTR_ENTITY_ID,
     ATTR_NAME,
     ATTR_TIME,
@@ -33,9 +34,23 @@ from homeassistant.helpers.dispatcher import (
 from . import const
 from .store import ScheduleEntry, async_get_registry
 from .timer import TimerHandler
-from .actions import ActionHandler
+from .actions import (
+    ActionHandler,
+    async_call_from_config,
+    parse_service_call,
+    state_matches_action,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+# Applying a slot can quietly fail: the device is unreachable, mid-reboot, or
+# the power came back a moment ago. Three quick attempts catch nearly all of
+# it; the quarter-hourly ones after that are for a device that is out for a
+# while, and giving up after an hour and a half keeps a genuinely dead device
+# from being called at forever.
+RECOVERY_STEPS = [5, 15, 30]
+RECOVERY_INTERVAL = 15 * 60
+RECOVERY_WINDOW = 90 * 60
 
 
 SERVICE_RUN_ACTION = "run_action"
@@ -124,6 +139,9 @@ class ScheduleEntity(ToggleEntity):
         # a track is only re-run when its slot or its ownership actually moved
         self._current_slots = {}
         self._applied = {}
+        # the ladder that puts right an application that did not take
+        self._recovery_timer = None
+        self._recovery_attempt = 0
         self._init = True
         self._tags = []
 
@@ -305,12 +323,132 @@ class ScheduleEntity(ToggleEntity):
             return False
         return start_of_timeslot > dt_util.as_local(dt_util.utcnow())
 
+    def async_pending_actions(self):
+        """actions of the current slots whose entity is not doing them yet
+
+        The devices are re-read from the slots that are current *now*, so a
+        retry applies what the schedule says at the moment it runs rather than
+        replaying what it said when the first attempt failed. A slot that has
+        since ended simply contributes nothing.
+        """
+        timeslots = self.schedule[const.ATTR_TIMESLOTS]
+        pending = []
+        for (track, slot) in self._current_slots.items():
+            if slot is None:
+                continue
+            owned = self.async_owned_entities(track)
+            for action in timeslots[slot][const.ATTR_ACTIONS]:
+                entity = action[ATTR_ENTITY_ID]
+                if not entity or entity in owned:
+                    continue
+                for call in parse_service_call(action):
+                    if not state_matches_action(self.hass, call):
+                        pending.append(call)
+        return pending
+
+    def async_unreachable_entities(self):
+        """entities of the current slots that are not answering at all"""
+        timeslots = self.schedule[const.ATTR_TIMESLOTS]
+        unreachable = set()
+        for (track, index) in self._current_slots.items():
+            if index is None:
+                continue
+            owned = self.async_owned_entities(track)
+            for action in timeslots[index][const.ATTR_ACTIONS]:
+                entity = action[ATTR_ENTITY_ID]
+                if not entity or entity in owned:
+                    continue
+                state = self.hass.states.get(entity)
+                if state is None or state.state in [STATE_UNAVAILABLE, STATE_UNKNOWN]:
+                    unreachable.add(entity)
+        return unreachable
+
+    async def async_recover(self, _now=None):
+        """put right anything that did not take
+
+        A device can be unreachable, mid-reboot, or simply slow, and a service
+        call that quietly did nothing used to stay that way until the next
+        boundary hours later. This tries again on a ladder - three times
+        quickly, then every quarter of an hour for an hour and a half - and
+        stops the moment the devices are where the schedule wants them.
+        """
+        self._recovery_timer = None
+        if self._state == STATE_OFF or not self.schedule:
+            return
+
+        pending = self.async_pending_actions()
+        if not pending:
+            # A device that is not answering is not the same as one that took
+            # the action: after a power cut it will come back wrong, and the
+            # ladder has to still be running when it does.
+            if self.async_unreachable_entities():
+                delay = self.async_recovery_delay()
+                if delay is not None:
+                    self._recovery_attempt += 1
+                    self._recovery_timer = async_call_later(
+                        self.hass, delay, self.async_recover
+                    )
+                    return
+            self._recovery_attempt = 0
+            return
+
+        if self._recovery_attempt:
+            _LOGGER.debug(
+                "Schedule {}: {} did not take, trying again (attempt {})".format(
+                    self.schedule_id,
+                    ", ".join(sorted({a[ATTR_ENTITY_ID] for a in pending})),
+                    self._recovery_attempt,
+                )
+            )
+            for action in pending:
+                await async_call_from_config(self.hass, action)
+
+        delay = self.async_recovery_delay()
+        if delay is None:
+            _LOGGER.warning(
+                "Schedule {} gave up on {} after {} minutes".format(
+                    self.schedule_id,
+                    ", ".join(sorted({a[ATTR_ENTITY_ID] for a in pending})),
+                    RECOVERY_WINDOW // 60,
+                )
+            )
+            self._recovery_attempt = 0
+            return
+
+        self._recovery_attempt += 1
+        self._recovery_timer = async_call_later(self.hass, delay, self.async_recover)
+
+    def async_recovery_delay(self):
+        """how long until the next attempt, or None once it is time to stop"""
+        attempt = self._recovery_attempt
+        if attempt < len(RECOVERY_STEPS):
+            return RECOVERY_STEPS[attempt]
+        slow_attempts = attempt - len(RECOVERY_STEPS)
+        if slow_attempts * RECOVERY_INTERVAL >= RECOVERY_WINDOW:
+            return None
+        return RECOVERY_INTERVAL
+
+    def async_cancel_recovery(self):
+        if self._recovery_timer:
+            self._recovery_timer()
+        self._recovery_timer = None
+        self._recovery_attempt = 0
+
+    def async_start_recovery(self):
+        """watch whether what was just applied actually took"""
+        self.async_cancel_recovery()
+        self._recovery_timer = async_call_later(
+            self.hass, RECOVERY_STEPS[0], self.async_recover
+        )
+
     async def async_sync_tracks(self, initial: bool = False):
         """apply the timeslot every track is currently in"""
         if self._state == STATE_OFF:
+            self.async_cancel_recovery()
             return
 
         timeslots = self.schedule[const.ATTR_TIMESLOTS]
+        applied = False
         for (track, slot) in self._current_slots.items():
             if slot is None:
                 self._applied.pop(track, None)
@@ -341,6 +479,10 @@ class ScheduleEntity(ToggleEntity):
                 track=track,
                 exclude_entities=excluded,
             )
+            applied = True
+
+        if applied:
+            self.async_start_recovery()
 
     @callback
     async def async_timer_finished(self, id: str):
@@ -557,6 +699,7 @@ class ScheduleEntity(ToggleEntity):
         _LOGGER.debug("Schedule {} is removed from hass".format(self.schedule_id))
 
         await self.async_cancel_timer()
+        self.async_cancel_recovery()
         await self._action_handler.async_empty_queue()
         await self._timer_handler.async_unload()
 
