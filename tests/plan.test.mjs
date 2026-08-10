@@ -30,8 +30,29 @@ const page = ({ anchors = true, schedule = null } = {}) => buildPage({
       } : {}),
     });
 
-    // the entity picker asks the backend which entities are already scheduled
-    window.__hass.callWS = () => Promise.resolve([]);
+    // the entity picker asks the backend which entities are already scheduled,
+    // and the editor asks for the device book
+    window.__wsCalls = [];
+    window.__hass.callWS = req => {
+      window.__wsCalls.push(req);
+      if (req && String(req.type).startsWith('scheduler/device_book')) {
+        window.__book = window.__book || { groups: [], devices: [], kinds: ['light', 'switch', 'climate'] };
+        if (req.type === 'scheduler/device_book/group') {
+          window.__book.groups = req.devices.length
+            ? [...window.__book.groups.filter(g => g.name !== req.group), { name: req.group, devices: req.devices }]
+            : window.__book.groups.filter(g => g.name !== req.group);
+        }
+        if (req.type === 'scheduler/device_book/device') {
+          window.__book.devices = [
+            ...window.__book.devices.filter(d => d.entity_id !== req.entity_id),
+            { entity_id: req.entity_id, name: req.name || req.entity_id, alias: req.name || null,
+              kind: req.kind || req.entity_id.split('.')[0], groups: [] },
+          ];
+        }
+        return Promise.resolve(window.__book);
+      }
+      return Promise.resolve([]);
+    };
 
     const dialog = document.createElement('dialog-scheduler-plan');
     dialog.hass = window.__hass;
@@ -762,6 +783,76 @@ export default async function run() {
       await window.__dialog.updateComplete;
     });
     s.ok(await count(p, '.help p') === 4, 'the editor can explain itself in place');
+  }, JERUSALEM);
+
+  // --- the device book -----------------------------------------------------
+  //
+  // Groups are Home Assistant labels and names are its entity aliases, so both
+  // are worth something outside a schedule. The kind is the piece kept here,
+  // because a device registered under the wrong domain decides wrongly whether
+  // the editor offers it a brightness or a temperature.
+
+  await withPage(page(), async p => {
+    const made = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['climate.salon', 'climate.bedroom']);
+      dialog._bookOpen = true;
+      dialog._newGroup = 'מזגנים';
+      await dialog.updateComplete;
+      await dialog._saveGroup('מזגנים', dialog._selectedGroupEntities());
+      await dialog.updateComplete;
+      return {
+        request: window.__wsCalls.find(r => r.type === 'scheduler/device_book/group'),
+        groups: dialog._book.groups.map(g => g.name),
+      };
+    });
+
+    s.ok(made.request.group === 'מזגנים', 'a group is created from the devices at hand');
+    s.ok(made.request.devices.length === 2, 'with all of them in it');
+    s.ok(made.groups.includes('מזגנים'), 'and it comes back in the book');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const named = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon']);
+      await dialog._nameDevice('light.salon', { name: 'מזגן סלון', kind: 'climate' });
+      return window.__wsCalls.find(r => r.type === 'scheduler/device_book/device');
+    });
+
+    s.ok(named.name === 'מזגן סלון', 'a device can be given the name the household uses');
+    s.ok(named.kind === 'climate',
+      'and put right when Home Assistant has it registered as the wrong sort of thing');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    const used = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['light.salon']);
+      dialog._book = {
+        groups: [{ name: 'מזגנים', devices: ['climate.salon', 'climate.bedroom'] }],
+        devices: [], kinds: [],
+      };
+      await dialog.updateComplete;
+      dialog._useGroup('מזגנים');
+      await dialog.updateComplete;
+      return dialog._plan.groups[0].entities;
+    });
+
+    s.ok(used.length === 3, 'a whole group of the book goes into a plan in one click');
+    s.ok(used.includes('light.salon'), 'without displacing what was already there');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
+    await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], ['climate.salon']);
+      dialog._bookOpen = true;
+      await dialog.updateComplete;
+    });
+    s.ok(await count_(p, '.book') === 1, 'the book opens in the editor');
+    s.ok(await count_(p, '.book-devices .device-row') === 1,
+      'showing the devices of the group being edited');
   }, JERUSALEM);
 
   // --- reopening a saved plan ---------------------------------------------

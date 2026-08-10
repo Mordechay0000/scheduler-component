@@ -446,6 +446,24 @@
         },
         "climate": {
           "degrees": "Temperature"
+        },
+        "book": {
+          "open": "Device book",
+          "title": "Device book",
+          "hint": "Your own names and groupings — kept in Home Assistant, so they work outside the scheduler too.",
+          "new_group": "Name a new group…",
+          "from_selection": "from this group's devices",
+          "use": "add to this group",
+          "name_it": "call it…",
+          "kind": {
+            "light": "light",
+            "switch": "switch",
+            "climate": "air conditioner / heater",
+            "cover": "cover",
+            "fan": "fan",
+            "media_player": "media player",
+            "other": "something else"
+          }
         }
       }
     }

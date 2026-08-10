@@ -1,4 +1,5 @@
 import {
+  mdiBookmarkMultipleOutline,
   mdiCallSplit,
   mdiClipboardTextClockOutline,
   mdiClose,
@@ -28,6 +29,13 @@ import { computeActionColor } from "../data/format/compute_action_color";
 import { computeEntity } from "../lib/entity";
 import { resolveBoundary } from "../data/plan/resolve_boundary";
 import { PlanReport, describePlan } from "../data/plan/describe_plan";
+import {
+  DeviceBook,
+  EMPTY_BOOK,
+  fetchDeviceBook,
+  nameDevice,
+  setDeviceGroup,
+} from "../data/plan/device_book";
 import {
   DEFAULT_END_ANCHOR,
   DEFAULT_START_ANCHOR,
@@ -175,6 +183,9 @@ export class DialogSchedulerPlan extends LitElement {
   @state() private _history: Plan[] = [];
   @state() private _future: Plan[] = [];
   @state() private _keys = false;
+  @state() private _book: DeviceBook = EMPTY_BOOK;
+  @state() private _bookOpen = false;
+  @state() private _newGroup = "";
   @state() private _report: PlanReport | null = null;
   @state() private _saved = false;
 
@@ -197,6 +208,8 @@ export class DialogSchedulerPlan extends LitElement {
     this._keys = false;
     // a brand new plan is where the step-by-step path is worth offering
     this._offerWizard = !params.schedule;
+    this._bookOpen = false;
+    this._loadBook();
     await this.updateComplete;
   }
 
@@ -950,6 +963,7 @@ export class DialogSchedulerPlan extends LitElement {
       ${this._offerWizard ? this._renderWizardOffer() : nothing}
       ${this._help ? this._renderHelp() : nothing}
       ${this._keys ? this._renderKeys() : nothing}
+      ${this._bookOpen ? this._renderBook() : nothing}
       ${this._report ? this._renderReport(this._report) : nothing}
       ${this._bandStart && this._bandEnd ? this._renderBand() : this._renderMissingAnchors()}
       ${this._renderInspector()}
@@ -990,6 +1004,12 @@ export class DialogSchedulerPlan extends LitElement {
             title=${this._t('keys.open')}
             @click=${() => { this._keys = !this._keys; }}
           ><ha-svg-icon .path=${mdiKeyboardOutline}></ha-svg-icon></button>
+          <button
+            class="ghost ${this._bookOpen ? 'primary' : ''}"
+            @click=${() => { this._bookOpen = !this._bookOpen; }}
+          >
+            <ha-svg-icon .path=${mdiBookmarkMultipleOutline}></ha-svg-icon>${this._t('book.open')}
+          </button>
           <button class="ghost" @click=${this._showReport}>
             <ha-svg-icon .path=${mdiClipboardTextClockOutline}></ha-svg-icon>${this._t('report.open')}
           </button>
@@ -1123,6 +1143,133 @@ export class DialogSchedulerPlan extends LitElement {
         </ol>
       </div>
     `;
+  }
+
+  private async _loadBook() {
+    try {
+      const book = await fetchDeviceBook(this.hass);
+      // an older integration, or none at all, simply has no book
+      this._book = {
+        groups: book?.groups || [],
+        devices: book?.devices || [],
+        kinds: book?.kinds || [],
+      };
+    } catch (_err) {
+      this._book = EMPTY_BOOK;
+    }
+  }
+
+  /**
+   * The household's own names and groupings.
+   *
+   * Groups are Home Assistant labels and names are its entity aliases, so both
+   * mean something outside this dialog too. The kind is the one piece kept
+   * here, because a device registered under the wrong domain - an air
+   * conditioner behind a switch - is what decides whether this editor offers it
+   * a temperature or a brightness.
+   */
+  private _renderBook() {
+    return html`
+      <div class="book">
+        <div class="book-head">
+          <span class="report-title">${this._t('book.title')}</span>
+          <span class="report-band">${this._t('book.hint')}</span>
+          <button class="icon-only" @click=${() => { this._bookOpen = false; }}>
+            <ha-svg-icon .path=${mdiClose}></ha-svg-icon>
+          </button>
+        </div>
+
+        <div class="book-body">
+          <div class="book-groups">
+            ${this._book.groups.map(group => html`
+            <div class="book-group">
+              <span class="book-group-name">${group.name}</span>
+              <span class="book-group-count">
+                ${this._t('group.members', '{n}', String(group.devices.length))}
+              </span>
+              <button class="ghost small" @click=${() => this._useGroup(group.name)}>
+                ${this._t('book.use')}
+              </button>
+              <button class="ghost small danger" @click=${() => this._saveGroup(group.name, [])}>
+                ${hassLocalize('ui.common.delete', this.hass)}
+              </button>
+            </div>`)}
+
+            <div class="book-group new">
+              <input
+                class="moment-name"
+                .value=${this._newGroup}
+                placeholder=${this._t('book.new_group')}
+                @input=${(ev: Event) => { this._newGroup = (ev.target as HTMLInputElement).value; }}
+              />
+              <button
+                class="ghost small"
+                ?disabled=${!this._newGroup.trim() || !this._selectedGroupEntities().length}
+                @click=${() => this._saveGroup(this._newGroup.trim(), this._selectedGroupEntities())}
+              >${this._t('book.from_selection')}</button>
+            </div>
+          </div>
+
+          <div class="book-devices">
+            ${this._selectedGroupEntities().map(entity => this._renderBookDevice(entity))}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderBookDevice(entity: string) {
+    const entry = this._book.devices.find(d => d.entity_id == entity);
+    const kinds = this._book.kinds.length ? this._book.kinds : ['light', 'switch', 'climate', 'other'];
+    return html`
+      <div class="device-row">
+        <span class="device-label">${this.hass.states[entity]?.attributes.friendly_name || entity}</span>
+        <input
+          class="moment-name"
+          .value=${entry?.alias || ''}
+          placeholder=${this._t('book.name_it')}
+          @change=${(ev: Event) =>
+        this._nameDevice(entity, { name: (ev.target as HTMLInputElement).value.trim() || null })}
+        />
+        <select @change=${(ev: Event) =>
+        this._nameDevice(entity, { kind: (ev.target as HTMLSelectElement).value })}>
+          ${kinds.map(kind => html`
+            <option value=${kind} ?selected=${(entry?.kind || entity.split('.')[0]) == kind}>
+              ${this._t(`book.kind.${kind}`) || kind}
+            </option>`)}
+        </select>
+      </div>
+    `;
+  }
+
+  private _selectedGroupEntities() {
+    return this._selectedCube()?.group.entities || this._plan.groups[0]?.entities || [];
+  }
+
+  private async _saveGroup(name: string, devices: string[]) {
+    try {
+      this._book = await setDeviceGroup(this.hass, name, devices);
+      this._newGroup = '';
+    } catch (err) {
+      this._reportError(err);
+    }
+  }
+
+  private async _nameDevice(entity: string, changes: { name?: string | null; kind?: string | null }) {
+    try {
+      this._book = await nameDevice(this.hass, entity, changes);
+    } catch (err) {
+      this._reportError(err);
+    }
+  }
+
+  /** put a whole group of the book into the stretch's group in one click */
+  private _useGroup(name: string) {
+    const selected = this._selectedCube();
+    const group = selected?.group || this._plan.groups[0];
+    if (!group) return;
+    const members = this._book.groups.find(g => g.name == name)?.devices || [];
+    this._setMembers(group, [...new Set([...group.entities, ...members])]);
   }
 
   private _renderMissingAnchors() {
@@ -1335,6 +1482,13 @@ export class DialogSchedulerPlan extends LitElement {
             multiple
             @value-changed=${(ev: CustomEvent) => this._setMembers(group, ev.detail.value)}
           ></scheduler-entity-picker>
+          ${this._book.groups.length ? html`
+          <div class="member-chips">
+            ${this._book.groups.map(entry => html`
+              <button class="chip" @click=${() => this._useGroup(entry.name)}>
+                <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${entry.name}
+              </button>`)}
+          </div>` : nothing}
           ${group.entities.length ? html`
           <span class="hint">${this._t('detach.hint')}</span>
           <div class="member-chips">
@@ -2558,6 +2712,34 @@ export class DialogSchedulerPlan extends LitElement {
         background: rgba(var(--plan-detach), 0.2);
         color: var(--primary-text-color);
       }
+
+      .book {
+        border-radius: var(--plan-radius);
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+        overflow: hidden;
+      }
+      .book-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--divider-color);
+      }
+      .book-body { display: flex; flex-wrap: wrap; gap: 20px; padding: 14px 16px; }
+      .book-groups { display: flex; flex-direction: column; gap: 6px; min-width: 260px; }
+      .book-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        background: rgba(var(--rgb-secondary-text-color, 114, 114, 114), 0.06);
+      }
+      .book-group.new { background: none; border: 1px dashed var(--divider-color); }
+      .book-group-name { font-size: 13px; font-weight: 600; flex: 1; }
+      .book-group-count { font-size: 11px; color: var(--secondary-text-color); }
+      .book-devices { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 280px; }
 
       .swatches { display: flex; flex-wrap: wrap; gap: 6px; max-width: 240px; }
 
