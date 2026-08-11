@@ -348,3 +348,24 @@ def test_a_device_at_its_settings_is_left_alone(hass, states):
         hass,
         action("light.salon", "light.turn_on", brightness_pct=80, color_temp_kelvin=2700),
     ) is True
+
+
+# --- and a device the stretch left out is not held either --------------------
+
+
+async def test_a_device_left_out_of_a_stretch_is_not_held(hass, states, calls):
+    """Holding holds what the stretch asked for, and nothing else.
+
+    A stretch that names one device holds that one. The other is not its
+    business: somebody switching it during the stretch is somebody switching
+    their own light, not a state to be argued with.
+    """
+    states.set("light.salon", "off")
+    states.set("switch.plata", "off")
+    queue = make_queue(hass, actions=[action("light.salon", "light.turn_on")])
+
+    await enforce(queue, "switch.plata")
+    assert calls == []
+
+    await enforce(queue, "light.salon")
+    assert [c["entity_id"] for c in calls] == ["light.salon"]

@@ -293,3 +293,53 @@ async def test_the_ladder_keeps_going_until_the_setting_lands(entity, states):
     await run_next(entity)
 
     assert [c["entity_id"] for c in entity.calls] == ["light.salon"]
+
+
+# --- a device the stretch does not name is not chased either ----------------
+#
+# "Not in this stretch" has to mean nothing at all happens to that device. It
+# is not switched, and these two are the ones that would otherwise creep in
+# behind your back: the ladder putting it "right" against a state this stretch
+# never asked for, and an unreachable device it does not own keeping the
+# ladder awake for ninety minutes.
+
+
+def test_a_device_left_out_of_a_stretch_is_never_put_right(entity, states):
+    entity.schedule[const.ATTR_TIMESLOTS] = [
+        slot("07:00:00", "22:00:00", track="group", entities=["light.salon"]),
+    ]
+    entity._current_slots = {"group": 0}
+    # both are off; only one of them is any of this stretch's business
+    states.set("light.salon", "off")
+    states.set("switch.plata", "off")
+
+    pending = [a["entity_id"] for a in entity.async_pending_actions()]
+
+    assert pending == ["light.salon"]
+    assert "switch.plata" not in pending
+
+
+def test_a_device_left_out_of_a_stretch_does_not_keep_the_ladder_awake(entity, states):
+    entity.schedule[const.ATTR_TIMESLOTS] = [
+        slot("07:00:00", "22:00:00", track="group", entities=["light.salon"]),
+    ]
+    entity._current_slots = {"group": 0}
+    states.set("light.salon", "on")
+    states.set("switch.plata", "unavailable")
+
+    assert entity.async_unreachable_entities() == set()
+
+
+async def test_nothing_is_scheduled_for_a_stretch_that_leaves_everything_out(entity, states):
+    entity.schedule[const.ATTR_TIMESLOTS] = [
+        slot("07:00:00", "22:00:00", track="group", entities=[]),
+    ]
+    entity._current_slots = {"group": 0}
+    states.set("light.salon", "off")
+    states.set("switch.plata", "unavailable")
+
+    entity.async_start_recovery()
+    await run_next(entity)
+
+    assert entity.calls == []
+    assert entity.scheduled == []

@@ -744,6 +744,47 @@ def test_one_stretch_holds_a_different_state_for_every_device():
     assert meal["light.hallway"]["service_data"]["brightness_pct"] == 10
 
 
+def test_the_same_thing_written_the_way_the_card_and_the_prompt_write_it():
+    """The canonical form is a list of devices, each with its own settings.
+
+    `state` plus `overrides` still reads, because plans were saved that way,
+    but this is what the editor and a model now produce - and the generator
+    case has to come out identical either way.
+    """
+    plan = plan_from_dict({
+        "name": "Shabbat",
+        "groups": [{
+            "name": "home",
+            "devices": ["climate.salon", "climate.bedroom", "light.salon", "light.hallway"],
+            "cubes": [{
+                "name": "the meal",
+                "from": "candle_lighting@20:00", "to": "candle_lighting@22:30",
+                "devices": [
+                    {"device": "climate.salon", "state": "on", "degrees": 16},
+                    {"device": "climate.bedroom", "state": "off"},
+                    {"device": "light.salon", "state": "on", "brightness": 50},
+                    {"device": "light.hallway", "state": "on", "brightness": 10},
+                ],
+            }],
+        }],
+    })
+    payload = plan_to_payload(plan)
+    meal = {a["entity_id"]: a for a in payload["timeslots"][0]["actions"]}
+
+    assert len(payload["timeslots"]) == 1
+    assert meal["climate.salon"]["service_data"]["temperature"] == 16
+    assert meal["climate.bedroom"]["service"] == "climate.turn_off"
+    assert meal["light.salon"]["service_data"]["brightness_pct"] == 50
+    assert meal["light.hallway"]["service_data"]["brightness_pct"] == 10
+    # and four different settings survive being read back out of the schedule
+    read = plan_from_schedule({"name": "x", "timeslots": payload["timeslots"]})
+    devices = read.groups[0].cubes[0].devices
+    assert devices["climate.salon"].degrees == 16
+    assert devices["light.salon"].brightness == 50
+    assert devices["light.hallway"].brightness == 10
+    assert devices["climate.bedroom"].state == "off"
+
+
 def test_the_other_way_round_later_in_the_night():
     slots = plan_to_payload(generator_plan())["timeslots"]
     night = {a["entity_id"]: a for a in slots[1]["actions"]}
