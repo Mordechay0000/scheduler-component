@@ -362,13 +362,27 @@ def _resolve_plan_devices(hass: HomeAssistant, plan: dict[str, Any]) -> dict[str
         for exception in (plan.get("exceptions") or [])
     ]
     for group in out["groups"]:
+        cubes = []
         for cube in group.get("cubes") or []:
+            cube = dict(cube)
+            if cube.get("devices"):
+                # a stretch names its devices too, and in the household's words:
+                # a book name becomes its entity, and a group name becomes every
+                # entity in it, each keeping the settings that were asked for
+                cube["devices"] = [
+                    {**device, "device": entity_id}
+                    for device in cube["devices"]
+                    if device.get("device")
+                    for entity_id in async_resolve(hass, [device["device"]])
+                ]
             if cube.get("overrides"):
                 cube["overrides"] = [
                     {**override, "device": async_resolve(hass, [override["device"]])[0]}
                     for override in cube["overrides"]
                     if override.get("device")
                 ]
+            cubes.append(cube)
+        group["cubes"] = cubes
     return out
 
 
@@ -384,7 +398,19 @@ class _SchedulerTool(llm.Tool):
                 "Devices & services, then try again."
             )
         try:
-            return await self.async_run(hass, dict(tool_input.tool_args or {}))
+            args = self.parameters(dict(tool_input.tool_args or {}))
+        except vol.Invalid as err:
+            # nothing between the model and here checks the arguments against the
+            # schema the tool published, so a missing key used to surface as
+            # "check the log" - which tells whoever is calling nothing at all
+            takes = ", ".join(sorted(str(key) for key in getattr(self.parameters, "schema", {})))
+            return _fail(
+                f"Those arguments do not match what {self.name} takes: {err}."
+                + (f" It takes: {takes}." if takes else "")
+                + " The tool's own description says what each one should hold."
+            )
+        try:
+            return await self.async_run(hass, args)
         except (PlanError, TimeError) as err:
             return _fail(str(err))
         except vol.Invalid as err:

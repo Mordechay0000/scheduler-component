@@ -209,6 +209,19 @@ def test_a_tool_says_so_when_the_integration_is_not_set_up(hass):
     assert "Devices & services" in result["error"]
 
 
+def test_a_tool_called_with_the_wrong_arguments_says_which_ones(hass, coordinator):
+    """Over MCP nothing checks the arguments before they get here.
+
+    A missing key used to come back as "something went wrong, check the log",
+    which leaves whoever is calling - a model, usually - with nowhere to go.
+    """
+    result = call(ExplainTimeTool, hass, time="havdalah-30m")  # it takes 'expression'
+
+    assert result["ok"] is False
+    assert "expression" in result["error"]
+    assert "scheduler_explain_time" in result["error"]
+
+
 # --- finding things to schedule ---------------------------------------------
 
 
@@ -342,9 +355,11 @@ def test_a_plan_with_a_device_in_two_groups_is_refused(hass, coordinator):
         "name": "x",
         "groups": [
             {"name": "a", "devices": ["light.salon"], "cubes": [
-                {"from": "candle_lighting", "to": "havdalah"}]},
+                {"from": "candle_lighting", "to": "havdalah",
+                 "devices": [{"device": "light.salon", "state": "on"}]}]},
             {"name": "b", "devices": ["light.salon"], "cubes": [
-                {"from": "candle_lighting", "to": "havdalah"}]},
+                {"from": "candle_lighting", "to": "havdalah",
+                 "devices": [{"device": "light.salon", "state": "off"}]}]},
         ],
     })
 
@@ -612,19 +627,44 @@ def test_a_plan_can_name_a_group_instead_of_entity_ids(hass, with_book):
     result = call(SavePlanTool, hass, plan={
         "name": "Shabbat",
         "groups": [{"name": "home", "devices": ["מטבח"], "cubes": [
-            {"name": "n", "from": "candle_lighting", "to": "havdalah"}]}],
+            {"name": "n", "from": "candle_lighting", "to": "havdalah",
+             "devices": [{"device": "מטבח", "state": "on"}]}]}],
     })
 
-    assert result["ok"]
+    assert result["ok"], result
     slots = hass.data[const.DOMAIN]["coordinator"].writes[-1][1][const.ATTR_TIMESLOTS]
     assert [a["entity_id"] for a in slots[0][const.ATTR_ACTIONS]] == ["switch.plata"]
+
+
+def test_a_stretch_can_name_its_devices_the_way_the_household_does(hass, with_book):
+    """The names reach inside the stretch too, where the states actually live.
+
+    A stretch says what each device does, so that is where a household name has
+    to work; naming a whole group there gives every device in it the same state.
+    """
+    result = call(SavePlanTool, hass, plan={
+        "name": "Shabbat",
+        "groups": [{"name": "home", "devices": ["מטבח", "light.salon"], "cubes": [
+            {"name": "n", "from": "candle_lighting", "to": "havdalah", "devices": [
+                {"device": "מטבח", "state": "on"},
+                {"device": "light.salon", "state": "on", "brightness": 50},
+            ]}]}],
+    })
+
+    assert result["ok"], result
+    slots = hass.data[const.DOMAIN]["coordinator"].writes[-1][1][const.ATTR_TIMESLOTS]
+    actions = {a["entity_id"]: a for a in slots[0][const.ATTR_ACTIONS]}
+    assert sorted(actions) == ["light.salon", "switch.plata"]
+    assert actions["light.salon"]["service_data"]["brightness_pct"] == 50
 
 
 def test_an_exception_can_name_a_device(hass, with_book):
     call(SavePlanTool, hass, plan={
         "name": "Shabbat",
         "groups": [{"name": "home", "devices": ["מטבח", "light.salon"], "cubes": [
-            {"name": "n", "from": "candle_lighting", "to": "havdalah"}]}],
+            {"name": "n", "from": "candle_lighting", "to": "havdalah",
+             "devices": [{"device": "מטבח", "state": "on"},
+                         {"device": "light.salon", "state": "on"}]}]}],
         "exceptions": [{"device": "פלטה של שבת", "from": "havdalah@11:30", "to": "havdalah@13:00"}],
     })
 

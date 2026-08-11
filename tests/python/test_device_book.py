@@ -136,6 +136,25 @@ def test_a_name_is_an_entity_alias(book):
     assert device["name"] == "מזגן סלון"
 
 
+def test_something_odd_in_the_aliases_does_not_take_the_book_down(book):
+    """Home Assistant has left a sentinel of its own among the aliases before.
+
+    Sorting that together with a real name raises, and the whole book - and with
+    it every plan that names a device rather than an entity id - went down with
+    it. One odd entry is worth skipping, not the household's names.
+    """
+
+    class Sentinel:  # neither a string nor comparable with one
+        pass
+
+    book.entities.entities["switch.ac_salon"].aliases = {Sentinel(), "מזגן סלון"}
+
+    device = next(d for d in async_get_book(book.hass)["devices"]
+                  if d["entity_id"] == "switch.ac_salon")
+
+    assert device["name"] == "מזגן סלון"
+
+
 def test_naming_something_that_is_not_registered_says_so(book):
     import asyncio
 

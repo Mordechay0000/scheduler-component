@@ -95,7 +95,10 @@ def async_get_book(hass: HomeAssistant) -> dict[str, Any]:
 
     devices: dict[str, dict[str, Any]] = {}
     for entry in entities.entities.values():
-        alias = next(iter(sorted(entry.aliases)), None)
+        # aliases is meant to hold strings, but Home Assistant has been known to
+        # leave a sentinel of its own in there; sorting the two together raises,
+        # and a whole plan is not worth losing over one odd registry entry
+        alias = next(iter(sorted(x for x in entry.aliases if isinstance(x, str))), None)
         member_of = [label_ids[x] for x in entry.labels if x in label_ids]
         if not alias and not member_of and entry.entity_id not in kinds:
             continue
