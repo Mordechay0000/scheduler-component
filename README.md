@@ -154,15 +154,15 @@ editor is there from the first screen.
 
 ### Driving it from a model
 
-The integration registers a Home Assistant [LLM API](https://developers.home-assistant.io/docs/core/llm/)
-called **Shabbat plans**, so there is no separate server to run. Home Assistant
-serves every registered LLM API two ways:
+The tools are added to the tools Home Assistant already serves, so there is no
+separate server to run and no second address to add: whatever MCP endpoint or
+voice pipeline the household already uses gets them, alongside `HassTurnOn` and
+the rest. Nothing to configure.
 
-* **Over MCP** — add the [MCP Server](https://www.home-assistant.io/integrations/mcp_server/)
-  integration and point an MCP client at `/api/mcp/scheduler_shabbat` with an
-  admin long-lived access token.
-* **To Assist** — pick "Shabbat plans" as the API in any conversation agent
-  (Anthropic, OpenAI, Google, Ollama, …) under its options.
+They are also registered as an LLM API of their own, called **Shabbat plans**,
+for anyone who wants these tools without the rest of Assist: pick it as the API
+in a conversation agent's options, or point an MCP client at
+`/api/mcp/scheduler_shabbat`.
 
 Either way the tools speak the plan's vocabulary — groups, stretches,
 exceptions — so a model never has to know a track from a priority. Times are
@@ -232,7 +232,7 @@ If you want to make a donation as appreciation of the work on this project, you 
 * **שמירה על המצב (ניסיוני)** – אם מפסק בקיר או אינטגרציה אחרת משנים מכשיר במהלך הקובייה, המנוע מחזיר אותו למצב שהוגדר. ממתין 30 שניות בין ניסיונות כדי לא להיכנס להתגוששות, ופועל רק על מה שהוא באמת יכול להשוות.
 * **העוגנים מכסים גם חג** – `upcoming_candle_lighting` ו-`upcoming_havdalah` בנויים על ״שבת **או יום טוב** הקרובים״, ולכן הפס נפתח גם בחג שנופל ביום חמישי ונסגר בסוף רצף של שלושה ימים. הזוג `upcoming_shabbat_*` הוא לשבת בלבד ומפספס כל חג — התוכנית מזהירה אם הוא בשימוש.
 * **אשף מודרך** – בוחרים מכשירים, קובעים מה קורה בכניסת שבת, ואז בונים את היום מזמנים עם שמות: סעודת ליל שבת, שינה, בוקר, סעודת שבת, שנת צהריים — או כל זמן אחר שמוסיפים. כל זמן קובע מה קורה ממנו ועד הבא אחריו, ובסוף האשף מקריא את היום כולו לבדיקה לפני שהוא בונה משהו. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
-* **תמיכה במודלי שפה** – האינטגרציה רושמת LLM API בשם ״Shabbat plans״, ולכן אין שרת נפרד להריץ. Home Assistant מגיש אותו גם דרך אינטגרציית [MCP Server](https://www.home-assistant.io/integrations/mcp_server/) בכתובת `/api/mcp/scheduler_shabbat`, וגם ל-Assist ולכל סוכן שיחה (Anthropic, OpenAI, Google, Ollama). הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
+* **תמיכה במודלי שפה** – הכלים מצטרפים לכלים ש-Home Assistant כבר מגיש, ולכן אין שרת נפרד להריץ ואין כתובת שנייה להוסיף: כל לקוח MCP או צינור קולי שכבר מחובר לבית מקבל אותם לצד `HassTurnOn` ושאר הכלים, בלי שום הגדרה. במקביל הם רשומים גם כ-LLM API נפרד בשם ״Shabbat plans״, למי שרוצה רק אותם — לבחירה בהגדרות סוכן שיחה או בכתובת `/api/mcp/scheduler_shabbat`. הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
 
 **עורך התזמון (Time scheme) המשופר:**
 
