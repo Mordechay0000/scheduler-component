@@ -38,10 +38,26 @@ export const nameDevice = (
 ): Promise<DeviceBook> =>
   hass.callWS({ type: 'scheduler/device_book/device', entity_id, ...changes });
 
+/**
+ * What is worth putting in a plan at all.
+ *
+ * A label goes on a device, and Home Assistant carries it to every entity that
+ * device has - an air conditioner's switch, and its temperature reading with
+ * it. The reading cannot be switched, so it never joins a stretch.
+ */
+export const SCHEDULABLE_DOMAINS = ['light', 'switch', 'fan', 'climate', 'input_boolean', 'media_player'];
+
+export const isSchedulable = (entity_id: string) =>
+  SCHEDULABLE_DOMAINS.includes(entity_id.split('.')[0]);
+
+/** a group's members, minus what cannot be switched */
+export const groupDevices = (book: DeviceBook, name: string): string[] =>
+  (book.groups.find(g => g.name == name)?.devices || []).filter(isSchedulable);
+
 /** the entities a name stands for: a group's members, or one device */
 export const devicesFor = (book: DeviceBook, name: string): string[] => {
   const group = book.groups.find(g => g.name == name);
-  if (group) return group.devices;
+  if (group) return group.devices.filter(isSchedulable);
   const device = book.devices.find(d => d.name == name || d.entity_id == name);
   return device ? [device.entity_id] : [];
 };

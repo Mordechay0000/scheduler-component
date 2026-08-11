@@ -25,6 +25,7 @@ from homeassistant.util.json import JsonObjectType
 from . import const
 from .device_book import (
     KINDS,
+    SCHEDULABLE_DOMAINS,
     async_get_book,
     async_name_device,
     async_remove_group,
@@ -49,9 +50,6 @@ _LOGGER = logging.getLogger(__name__)
 
 API_ID = f"{const.DOMAIN}_shabbat"
 API_NAME = "Shabbat plans"
-
-#: entity domains worth putting in a plan - a temperature reading is not one
-SCHEDULABLE_DOMAINS = ("light", "switch", "fan", "climate", "input_boolean", "media_player")
 
 #: What every conversation carries, whether it is about Shabbat or about a lamp.
 #:
@@ -792,6 +790,8 @@ class SetDeviceGroupTool(_SchedulerTool):
 
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
         group = args["group"].strip()
+        if not group:
+            return _fail("A group needs a name - what the household calls those devices.")
         devices = async_resolve(hass, list(args["devices"]))
         if not devices:
             removed = await async_remove_group(hass, group)

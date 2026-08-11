@@ -227,6 +227,33 @@ def test_a_group_name_stands_for_its_devices(book):
     assert async_resolve(book.hass, ["מזגנים"]) == ["light.ac_bedroom", "switch.ac_salon"]
 
 
+def test_a_group_brings_only_what_can_be_switched(book):
+    """A label goes on the device, and Home Assistant puts it on every entity.
+
+    Labelling an air conditioner labels its temperature reading with it. The
+    reading cannot be turned on, so it has no business in a plan.
+    """
+    import asyncio
+
+    book.hass.states.set("sensor.ac_salon_temperature", "24")
+    book.entities.entities["sensor.ac_salon_temperature"] = type(
+        book.entities.entities["switch.ac_salon"]
+    )("sensor.ac_salon_temperature")
+    asyncio.run(async_set_group(book.hass, "מזגנים", ["switch.ac_salon"]))
+    label = book.labels.async_get_label_by_name(group_label_name("מזגנים"))
+    book.entities.entities["sensor.ac_salon_temperature"].labels = {label.label_id}
+
+    assert "sensor.ac_salon_temperature" in async_get_book(book.hass)["groups"][0]["devices"]
+    assert async_resolve(book.hass, ["מזגנים"]) == ["switch.ac_salon"]
+
+
+def test_a_label_of_the_bare_prefix_is_not_a_group(book):
+    """One turns up when a group is made with no name; it is noise, not a group."""
+    book.labels.async_create(group_label_name(""))
+
+    assert async_get_book(book.hass)["groups"] == []
+
+
 def test_a_device_name_stands_for_the_device(book):
     import asyncio
 

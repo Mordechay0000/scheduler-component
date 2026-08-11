@@ -1354,6 +1354,25 @@ export default async function run() {
   }, JERUSALEM);
 
   await withPage(page(), async p => {
+    const used = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._setMembers(dialog._plan.groups[0], []);
+      dialog._book = {
+        groups: [{ name: 'מזגנים', devices: ['climate.salon', 'sensor.salon_temperature'] }],
+        devices: [], kinds: [],
+      };
+      await dialog.updateComplete;
+      dialog._useGroup('מזגנים');
+      await dialog.updateComplete;
+      return dialog._plan.groups[0].entities;
+    });
+
+    s.ok(!used.includes('sensor.salon_temperature'),
+      'a label sits on every entity a device has, and a reading cannot be switched');
+    s.ok(used.includes('climate.salon'), 'what can be switched comes in');
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
     await p.evaluate(async () => {
       const dialog = window.__dialog;
       dialog._setMembers(dialog._plan.groups[0], ['climate.salon']);

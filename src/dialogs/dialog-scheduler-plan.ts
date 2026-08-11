@@ -34,6 +34,7 @@ import {
   DeviceBook,
   EMPTY_BOOK,
   fetchDeviceBook,
+  groupDevices,
   nameDevice,
   setDeviceGroup,
 } from "../data/plan/device_book";
@@ -1519,7 +1520,7 @@ export class DialogSchedulerPlan extends LitElement {
     const selected = this._selectedCube();
     const group = selected?.group || this._plan.groups[0];
     if (!group) return;
-    const members = this._book.groups.find(g => g.name == name)?.devices || [];
+    const members = groupDevices(this._book, name);
     this._setMembers(group, [...new Set([...group.entities, ...members])]);
   }
 
@@ -2614,13 +2615,16 @@ export class DialogSchedulerPlan extends LitElement {
           </span>
           ${this._helpText('book_groups')}
           <div class="member-chips">
-            ${this._book.groups.map(group => html`
-            <button class="chip" @click=${() => setEntities([...this._wizard.entities, ...group.devices])}>
+            ${this._book.groups.map(group => {
+      const members = groupDevices(this._book, group.name);
+      return html`
+            <button class="chip" @click=${() => setEntities([...this._wizard.entities, ...members])}>
               <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${group.name}
               <span class="chip-action">
-                ${this._t('group.members', '{n}', String(group.devices.length))}
+                ${this._t('group.members', '{n}', String(members.length))}
               </span>
-            </button>`)}
+            </button>`;
+    })}
           </div>
         </div>` : nothing}
 

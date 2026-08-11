@@ -51,6 +51,16 @@ KINDS = {
 
 DEFAULT_KIND = "other"
 
+#: what is worth putting in a schedule at all. A label is put on a device, and
+#: Home Assistant then carries it to every entity that device has - the air
+#: conditioner's switch, and its temperature reading with it. The reading cannot
+#: be switched, so a group is only ever expanded to the entities that can be.
+SCHEDULABLE_DOMAINS = ("light", "switch", "fan", "climate", "input_boolean", "media_player")
+
+
+def is_schedulable(entity_id: str) -> bool:
+    return entity_id.split(".")[0] in SCHEDULABLE_DOMAINS
+
 
 def kind_from_domain(entity_id: str) -> str:
     domain = entity_id.split(".")[0]
@@ -89,7 +99,7 @@ def async_get_book(hass: HomeAssistant) -> dict[str, Any]:
     label_ids: dict[str, str] = {}
     for label in labels.async_list_labels():
         name = group_from_label(label.name)
-        if name is not None:
+        if name:  # a label of the bare prefix names no group; it is not one
             groups[name] = []
             label_ids[label.label_id] = name
 
@@ -150,7 +160,10 @@ def async_resolve(hass: HomeAssistant, names: list[str]) -> list[str]:
         if "." in name and hass.states.get(name) is not None:
             candidates = [name]
         elif name in by_group:
-            candidates = by_group[name]
+            # a label lands on every entity the device has, so a group named in
+            # a plan brings the air conditioner's temperature reading along with
+            # its switch. Only what can actually be switched belongs in a plan.
+            candidates = [x for x in by_group[name] if is_schedulable(x)]
         elif name.lower() in by_name:
             candidates = [by_name[name.lower()]]
         else:
