@@ -19,6 +19,7 @@ from scheduler import const
 from scheduler.llm_api import (
     API_ID,
     API_PROMPT,
+    PLAN_GUIDE,
     TOOLS,
     AddExceptionTool,
     DeleteScheduleTool,
@@ -151,8 +152,51 @@ def test_every_tool_is_named_and_described():
 
 
 def test_the_prompt_teaches_the_one_thing_people_get_wrong():
+    """Of everything a plan involves, this is what cannot be recovered from."""
     assert "candle_lighting@22:30" in API_PROMPT
-    assert "every night of the week" in API_PROMPT
+    assert "every day of the week" in API_PROMPT
+
+
+def test_the_prompt_stays_small_enough_to_sit_in_front_of_every_request():
+    """These tools ride along with all of Home Assistant's own.
+
+    Whatever model the household runs sees this before every request, about a
+    lamp as much as about Shabbat - and it is often a small model, with little
+    room to spare. The rules live behind a tool for that reason; this is only
+    what a model cannot recover from getting wrong.
+    """
+    assert len(API_PROMPT) < 1400, len(API_PROMPT)
+    assert len(PLAN_GUIDE) > 4000  # the detail is not lost, only moved
+    assert "scheduler_how_to_write_a_plan" in API_PROMPT
+
+
+def test_the_guide_is_one_call_away(hass, coordinator):
+    from scheduler.llm_api import HowToWritePlanTool
+
+    result = call(HowToWritePlanTool, hass)
+
+    assert result["guide"] == PLAN_GUIDE
+    assert "A WORKED PLAN" in result["guide"]
+
+
+def test_a_stray_argument_to_a_reading_tool_is_not_worth_a_refusal(hass, coordinator):
+    """Small models pass an argument that was never asked for. Let them."""
+    result = call(DescribeAnchorsTool, hass, when="tonight")
+
+    assert result["ok"] is True
+
+
+def test_a_plan_that_will_not_do_says_where_the_rules_are(hass, coordinator):
+    """A model that never called the guide finds out about it when it is stuck."""
+    result = call(SavePlanTool, hass, plan={
+        "name": "x",
+        "groups": [{"name": "g", "devices": ["light.salon"], "cubes": [
+            {"from": "candle_lighting", "to": "nonsense",
+             "devices": [{"device": "light.salon", "state": "on"}]}]}],
+    })
+
+    assert result["ok"] is False
+    assert "scheduler_how_to_write_a_plan" in result["error"]
 
 
 def test_the_plan_argument_is_a_real_schema():
@@ -169,11 +213,11 @@ def test_the_plan_argument_is_a_real_schema():
     assert result["plan"]["groups"][0]["cubes"][0]["devices"][0]["state"] == "on"
 
 
-def test_the_prompt_says_when_to_override_and_when_to_detach():
+def test_the_guide_says_when_to_override_and_when_to_detach():
     """The two are easy to confuse, and picking wrong duplicates a timeline."""
-    assert "LEAVING A DEVICE OUT MEANS SOMETHING" in API_PROMPT
-    assert "its own *hours*" in API_PROMPT
-    assert "enforce" in API_PROMPT
+    assert "LEAVING A DEVICE OUT MEANS SOMETHING" in PLAN_GUIDE
+    assert "its own *hours*" in PLAN_GUIDE
+    assert "enforce" in PLAN_GUIDE
 
 
 def test_the_schema_offers_overrides_and_light_parameters():
@@ -278,7 +322,7 @@ def test_get_says_plainly_when_there_is_no_plan(hass, coordinator):
     result = call(GetPlanTool, hass)
 
     assert result["exists"] is False
-    assert "save_plan" in result["note"]
+    assert "how_to_write_a_plan" in result["note"]  # where to find out how
 
 
 def test_saving_a_plan_creates_it_in_one_write(hass, coordinator):
@@ -568,8 +612,9 @@ def test_adding_an_exception_hands_back_the_report_too(hass, coordinator):
 
 
 def test_the_prompt_tells_the_model_to_preview_first():
-    assert "preview before saving" in API_PROMPT
+    assert "scheduler_preview_plan" in API_PROMPT
     assert "read the report back" in API_PROMPT
+    assert "preview before saving" in PLAN_GUIDE
 
 
 # --- the household's own names ----------------------------------------------
@@ -692,9 +737,9 @@ def test_naming_a_device_that_is_not_here_says_so(hass, with_book):
     assert "list_devices" in result["error"]
 
 
-def test_the_prompt_points_at_the_book_first():
-    assert "scheduler_get_device_book" in API_PROMPT
-    assert "instead of an entity id" in API_PROMPT
+def test_the_guide_points_at_the_book_first():
+    assert "scheduler_get_device_book" in PLAN_GUIDE
+    assert "instead of an entity id" in PLAN_GUIDE
 
 
 # --- being registered at all ------------------------------------------------

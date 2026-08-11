@@ -180,6 +180,13 @@ That last distinction is the one that matters and the one models get wrong, so
 saving a plan that contains a bare clock time returns a warning saying what to
 write instead.
 
+Because the tools sit in front of every request the household's model handles —
+about a lamp as much as about Shabbat — what they carry there is deliberately
+small: a paragraph with the shape of a plan and the time forms, and nothing
+else. The rules, the worked example and the mistakes to avoid live behind
+`scheduler_how_to_write_a_plan`, one call away, and every refusal says so. That
+keeps the tools usable by the small models people actually run at home.
+
 | Tool | For |
 |---|---|
 | `scheduler_list_devices` | finding entity ids |
@@ -232,7 +239,7 @@ If you want to make a donation as appreciation of the work on this project, you 
 * **שמירה על המצב (ניסיוני)** – אם מפסק בקיר או אינטגרציה אחרת משנים מכשיר במהלך הקובייה, המנוע מחזיר אותו למצב שהוגדר. ממתין 30 שניות בין ניסיונות כדי לא להיכנס להתגוששות, ופועל רק על מה שהוא באמת יכול להשוות.
 * **העוגנים מכסים גם חג** – `upcoming_candle_lighting` ו-`upcoming_havdalah` בנויים על ״שבת **או יום טוב** הקרובים״, ולכן הפס נפתח גם בחג שנופל ביום חמישי ונסגר בסוף רצף של שלושה ימים. הזוג `upcoming_shabbat_*` הוא לשבת בלבד ומפספס כל חג — התוכנית מזהירה אם הוא בשימוש.
 * **אשף מודרך** – בוחרים מכשירים, קובעים מה קורה בכניסת שבת, ואז בונים את היום מזמנים עם שמות: סעודת ליל שבת, שינה, בוקר, סעודת שבת, שנת צהריים — או כל זמן אחר שמוסיפים. כל זמן קובע מה קורה ממנו ועד הבא אחריו, ובסוף האשף מקריא את היום כולו לבדיקה לפני שהוא בונה משהו. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
-* **תמיכה במודלי שפה** – הכלים מצטרפים לכלים ש-Home Assistant כבר מגיש, ולכן אין שרת נפרד להריץ ואין כתובת שנייה להוסיף: כל לקוח MCP או צינור קולי שכבר מחובר לבית מקבל אותם לצד `HassTurnOn` ושאר הכלים, בלי שום הגדרה. במקביל הם רשומים גם כ-LLM API נפרד בשם ״Shabbat plans״, למי שרוצה רק אותם — לבחירה בהגדרות סוכן שיחה או בכתובת `/api/mcp/scheduler_shabbat`. הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
+* **תמיכה במודלי שפה** – הכלים מצטרפים לכלים ש-Home Assistant כבר מגיש, ולכן אין שרת נפרד להריץ ואין כתובת שנייה להוסיף: כל לקוח MCP או צינור קולי שכבר מחובר לבית מקבל אותם לצד `HassTurnOn` ושאר הכלים, בלי שום הגדרה. במקביל הם רשומים גם כ-LLM API נפרד בשם ״Shabbat plans״, למי שרוצה רק אותם — לבחירה בהגדרות סוכן שיחה או בכתובת `/api/mcp/scheduler_shabbat`. ההנחיה שנוספת לכל שיחה מכוונת להיות קטנה — פסקה אחת עם צורת התוכנית וצורות הזמן — וכל השאר (הכללים, דוגמה מלאה, הטעויות) יושב מאחורי `scheduler_how_to_write_a_plan` וכל שגיאה מפנה אליו, כדי שגם מודלים קטנים שרצים בבית יוכלו לעבוד עם זה. הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
 
 **עורך התזמון (Time scheme) המשופר:**
 

@@ -53,9 +53,38 @@ API_NAME = "Shabbat plans"
 #: entity domains worth putting in a plan - a temperature reading is not one
 SCHEDULABLE_DOMAINS = ("light", "switch", "fan", "climate", "input_boolean", "media_player")
 
+#: What every conversation carries, whether it is about Shabbat or about a lamp.
+#:
+#: It is deliberately short. These tools are offered alongside all of Home
+#: Assistant's own, to whatever model the household runs - often a small one -
+#: and a page of rules in front of every request crowds out the request. What is
+#: here is only what a model cannot recover from getting wrong: the shape of a
+#: plan, the time forms, that a stretch holds a state per device, and where the
+#: rest is kept. The rest is one call away, and the tools point at it whenever
+#: something does not add up.
 API_PROMPT = """
-You can read and write the household's Shabbat plan.
+SHABBAT PLANS
+A plan covers one Shabbat or festival: a band from candle lighting to havdalah,
+cut into named stretches, with a row of them per group of devices. Both ends are
+read from the Jewish calendar every week, so a plan is written once.
 
+Times: candle_lighting, havdalah, havdalah-30m, candle_lighting+1h,
+candle_lighting@22:30 (22:30 on the day it came in), havdalah@06:30 (06:30 on
+the day it goes out). A bare "22:30" means 22:30 every day of the week and is
+almost always wrong inside a plan.
+
+A stretch has no state of its own. It lists devices, each with its own state and
+its own settings - this is how the salon air conditioner runs while the bedroom
+ones are off. A device left out of that list is not touched at all. Each stretch
+starts where the one before it ends.
+
+Call scheduler_how_to_write_a_plan before writing or changing a plan: it holds
+the rules, a worked example, and what to tell the person. Then check with
+scheduler_preview_plan and read the report back before scheduler_save_plan.
+""".strip()
+
+#: The whole of it, handed over by a tool rather than by the prompt.
+PLAN_GUIDE = """
 WHAT A PLAN IS
 A plan is one band of time, from candle lighting to havdalah, cut into named
 stretches. It is not a weekly repeat: both ends are read from the Jewish
@@ -306,6 +335,9 @@ PLAN_SCHEMA = vol.Schema(
 )
 
 
+_GUIDE_HINT = f"Call {const.DOMAIN}_how_to_write_a_plan for the rules and a worked example."
+
+
 def _fail(message: str) -> JsonObjectType:
     """Errors are for the caller to act on, so they say what to do next."""
     return {"ok": False, "error": message}
@@ -389,6 +421,13 @@ def _resolve_plan_devices(hass: HomeAssistant, plan: dict[str, Any]) -> dict[str
 class _SchedulerTool(llm.Tool):
     """Shared plumbing: a tool never raises, it explains."""
 
+    #: what a tool that takes nothing accepts. A small model hands a stray
+    #: argument to a read-only tool now and then; refusing costs it a turn and
+    #: teaches it nothing, so those are dropped. Tools that write declare a
+    #: schema of their own, and those stay strict - there a wrong key is a wrong
+    #: plan, and saying so is the whole point.
+    parameters = vol.Schema({}, extra=vol.REMOVE_EXTRA)
+
     async def async_call(
         self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext
     ) -> JsonObjectType:
@@ -412,15 +451,29 @@ class _SchedulerTool(llm.Tool):
         try:
             return await self.async_run(hass, args)
         except (PlanError, TimeError) as err:
-            return _fail(str(err))
+            # the prompt is short on purpose, so a refusal is where a model that
+            # never read the guide finds out that there is one
+            return _fail(f"{str(err)} {_GUIDE_HINT}")
         except vol.Invalid as err:
-            return _fail(f"The scheduler refused that: {err}")
+            return _fail(f"The scheduler refused that: {err} {_GUIDE_HINT}")
         except Exception:  # noqa: BLE001 - a tool that raises is a tool that stops a conversation
             _LOGGER.exception("Shabbat plan tool %s failed", self.name)
             return _fail("Something went wrong. Check the Home Assistant log for details.")
 
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
         raise NotImplementedError
+
+
+class HowToWritePlanTool(_SchedulerTool):
+    name = f"{const.DOMAIN}_how_to_write_a_plan"
+    description = (
+        "Read this before writing or changing a Shabbat plan: the rules, the time "
+        "forms, a worked example, and the mistakes that cost a household a Shabbat. "
+        "Takes no arguments."
+    )
+
+    async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
+        return {"ok": True, "guide": PLAN_GUIDE}
 
 
 class ListDevicesTool(_SchedulerTool):
@@ -551,7 +604,7 @@ class GetPlanTool(_SchedulerTool):
             return {
                 "ok": True,
                 "exists": False,
-                "note": f"No Shabbat plan yet. Call {const.DOMAIN}_save_plan to create one.",
+                "note": f"No Shabbat plan yet. {_GUIDE_HINT}",
             }
         plan = plan_from_schedule(schedule)
         return {
@@ -804,6 +857,7 @@ class NameDeviceTool(_SchedulerTool):
 
 
 TOOLS: list[type[_SchedulerTool]] = [
+    HowToWritePlanTool,
     GetDeviceBookTool,
     SetDeviceGroupTool,
     NameDeviceTool,
