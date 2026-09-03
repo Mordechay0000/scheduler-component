@@ -57,10 +57,15 @@ class FakeLabelRegistry:
 
 
 class FakeEntry:
-    def __init__(self, entity_id, aliases=None, labels=None):
+    def __init__(self, entity_id, aliases=None, labels=None, entity_category=None,
+                 hidden_by=None, platform=None):
         self.entity_id = entity_id
         self.aliases = set(aliases or [])
         self.labels = set(labels or [])
+        self.entity_category = entity_category
+        self.hidden_by = hidden_by
+        self.disabled_by = None
+        self.platform = platform
 
 
 class FakeEntityRegistry:
@@ -243,8 +248,48 @@ def test_a_group_brings_only_what_can_be_switched(book):
     label = book.labels.async_get_label_by_name(group_label_name("מזגנים"))
     book.entities.entities["sensor.ac_salon_temperature"].labels = {label.label_id}
 
-    assert "sensor.ac_salon_temperature" in async_get_book(book.hass)["groups"][0]["devices"]
+    assert async_get_book(book.hass)["groups"][0]["devices"] == ["switch.ac_salon"]
     assert async_resolve(book.hass, ["מזגנים"]) == ["switch.ac_salon"]
+    assert [d["entity_id"] for d in async_get_book(book.hass)["devices"]] == ["switch.ac_salon"]
+
+
+def test_only_the_device_itself_gets_into_the_book(book):
+    """One air conditioner arrives with a crowd: a child lock, a firmware
+    version, a temperature reading. A household calls one of them the device,
+    and only that one can be told to turn on."""
+    import asyncio
+
+    book.hass.states.set("switch.ac_salon_child_lock", "off")
+    book.entities.entities["switch.ac_salon_child_lock"] = FakeEntry(
+        "switch.ac_salon_child_lock", aliases={"נעילת הורים"}, entity_category="config"
+    )
+    book.hass.states.set("switch.schedule_abc123", "on")
+    book.entities.entities["switch.schedule_abc123"] = FakeEntry(
+        "switch.schedule_abc123", aliases={"תזמון"}, platform=const.DOMAIN
+    )
+    asyncio.run(async_set_group(book.hass, "מזגנים", ["switch.ac_salon"]))
+
+    listed = [d["entity_id"] for d in async_get_book(book.hass)["devices"]]
+
+    assert "switch.ac_salon" in listed
+    assert "switch.ac_salon_child_lock" not in listed  # a control, not the device
+    assert "switch.schedule_abc123" not in listed  # scheduling a schedule is a loop
+
+
+def test_a_control_cannot_be_put_into_the_book_by_hand_either(book):
+    import asyncio
+
+    book.hass.states.set("switch.ac_salon_child_lock", "off")
+    book.entities.entities["switch.ac_salon_child_lock"] = FakeEntry(
+        "switch.ac_salon_child_lock", entity_category="config"
+    )
+
+    with pytest.raises(ValueError) as err:
+        asyncio.run(async_name_device(book.hass, "switch.ac_salon_child_lock", "נעילה"))
+    assert "cannot be switched" in str(err.value)
+
+    asyncio.run(async_set_group(book.hass, "מזגנים", ["switch.ac_salon", "switch.ac_salon_child_lock"]))
+    assert async_get_book(book.hass)["groups"][0]["devices"] == ["switch.ac_salon"]
 
 
 def test_a_label_of_the_bare_prefix_is_not_a_group(book):

@@ -277,6 +277,28 @@ def test_list_devices_shows_only_what_can_be_scheduled(hass, coordinator):
     assert "sensor.temperature" not in ids  # a reading is not a device to switch
 
 
+def test_list_devices_shows_the_devices_and_not_their_knobs(hass, with_book):
+    """An air conditioner brings a child lock and a firmware version with it.
+
+    Offering those to whoever is choosing devices only makes the real ones
+    harder to find, and none of them can be told to turn on.
+    """
+    from test_device_book import FakeEntry
+
+    hass.states.set("switch.plata_child_lock", "off")
+    with_book.entities.entities["switch.plata_child_lock"] = FakeEntry(
+        "switch.plata_child_lock", entity_category="config"
+    )
+    hass.states.set("switch.schedule_abc123", "on")
+    with_book.entities.entities["switch.schedule_abc123"] = FakeEntry(
+        "switch.schedule_abc123", platform=const.DOMAIN
+    )
+
+    ids = [d["entity_id"] for d in call(ListDevicesTool, hass)["devices"]]
+
+    assert ids == ["light.salon", "switch.plata"]
+
+
 def test_list_devices_can_be_searched(hass, coordinator):
     result = call(ListDevicesTool, hass, search="פלטה")
     assert [d["entity_id"] for d in result["devices"]] == ["switch.plata"]

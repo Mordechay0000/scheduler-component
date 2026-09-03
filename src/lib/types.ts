@@ -94,6 +94,20 @@ export interface HomeAssistant {
   connection: Connection;
   connected: boolean;
   states: HassEntities;
+  /**
+   * The entity registry, as the frontend carries it. Home Assistant marks the
+   * pieces of a device that are not the device - a child lock, a firmware
+   * version - with a category, and hides what it does not want offered.
+   */
+  entities?: {
+    [entity_id: string]: {
+      entity_id: string;
+      entity_category?: string | null;
+      hidden?: boolean;
+      platform?: string;
+      device_id?: string | null;
+    };
+  };
   services: HassServices;
   config: HassConfig;
   themes: Themes;

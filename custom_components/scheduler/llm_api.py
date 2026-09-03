@@ -25,7 +25,7 @@ from homeassistant.util.json import JsonObjectType
 from . import const
 from .device_book import (
     KINDS,
-    SCHEDULABLE_DOMAINS,
+    async_devices_to_schedule,
     async_get_book,
     async_name_device,
     async_remove_group,
@@ -491,15 +491,16 @@ class ListDevicesTool(_SchedulerTool):
 
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
         needle = (args.get("search") or "").lower().strip()
-        devices = [
-            {
-                "entity_id": state.entity_id,
-                "name": state.attributes.get("friendly_name") or state.entity_id,
-                "state": state.state,
-            }
-            for state in hass.states.async_all()
-            if state.domain in SCHEDULABLE_DOMAINS
-        ]
+        devices = []
+        for entity_id in async_devices_to_schedule(hass):
+            state = hass.states.get(entity_id)
+            devices.append(
+                {
+                    "entity_id": entity_id,
+                    "name": state.attributes.get("friendly_name") or entity_id,
+                    "state": state.state,
+                }
+            )
         if needle:
             devices = [
                 d for d in devices if needle in d["entity_id"].lower() or needle in d["name"].lower()

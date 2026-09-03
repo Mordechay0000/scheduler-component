@@ -1354,6 +1354,36 @@ export default async function run() {
   }, JERUSALEM);
 
   await withPage(page(), async p => {
+    const offered = await p.evaluate(async () => {
+      const picker = document.createElement('scheduler-entity-picker');
+      picker.hass = {
+        ...window.__hass,
+        states: {
+          'climate.salon': { entity_id: 'climate.salon', attributes: { friendly_name: 'מזגן סלון' } },
+          'switch.salon_child_lock': { entity_id: 'switch.salon_child_lock', attributes: { friendly_name: 'מזגן סלון Child lock' } },
+          'sensor.salon_temperature': { entity_id: 'sensor.salon_temperature', attributes: {} },
+          'update.salon_firmware': { entity_id: 'update.salon_firmware', attributes: {} },
+          'switch.schedule_46f482': { entity_id: 'switch.schedule_46f482', attributes: {} },
+        },
+        entities: {
+          'climate.salon': { entity_id: 'climate.salon' },
+          'switch.salon_child_lock': { entity_id: 'switch.salon_child_lock', entity_category: 'config' },
+          'switch.schedule_46f482': { entity_id: 'switch.schedule_46f482', platform: 'scheduler' },
+        },
+      };
+      picker.devicesOnly = true;
+      return picker._filteredItems().map(i => i.id);
+    });
+
+    s.ok(offered.includes('climate.salon'), 'the entity search offers the device itself');
+    s.ok(!offered.includes('switch.salon_child_lock'),
+      'and not the child lock that came with it');
+    s.ok(!offered.includes('sensor.salon_temperature') && !offered.includes('update.salon_firmware'),
+      'nor a reading or a firmware version, which cannot be switched at all');
+    s.ok(!offered.includes('switch.schedule_46f482'), "nor the scheduler's own switches");
+  }, JERUSALEM);
+
+  await withPage(page(), async p => {
     const used = await p.evaluate(async () => {
       const dialog = window.__dialog;
       dialog._setMembers(dialog._plan.groups[0], []);

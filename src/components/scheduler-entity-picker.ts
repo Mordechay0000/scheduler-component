@@ -1,6 +1,6 @@
 import { css, html, LitElement, nothing, PropertyValues, TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators";
-import { computeDomain, friendlyName } from "../lib/entity";
+import { computeDomain, friendlyName, isDeviceToSchedule } from "../lib/entity";
 import { matchPattern } from "../lib/patterns";
 import { HomeAssistant } from "../lib/types";
 import { fireEvent } from "../lib/fire_event";
@@ -41,6 +41,17 @@ export class SchedulerEntityPicker extends LitElement {
 
   @property({ type: Boolean })
   disabled = false;
+
+  /**
+   * Offer only the devices themselves.
+   *
+   * A search that answers "מזגן" with the unit, its child lock, its firmware
+   * version and its temperature reading is a search that has to be read
+   * carefully. Off by default, so the ordinary editor keeps offering
+   * everything it always has.
+   */
+  @property({ type: Boolean })
+  devicesOnly = false;
 
   filterFunc?: (stateObj: HassEntity) => boolean;
 
@@ -264,6 +275,8 @@ export class SchedulerEntityPicker extends LitElement {
       });
     }
     entityIds = entityIds.filter(e => !this.scheduleEntities.includes(e));
+
+    if (this.devicesOnly) entityIds = entityIds.filter(e => isDeviceToSchedule(e, this.hass));
 
     if (this.filterFunc) entityIds = entityIds.filter(e => this.filterFunc!(this.hass.states[e]));
 

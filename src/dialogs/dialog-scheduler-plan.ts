@@ -1780,6 +1780,7 @@ export class DialogSchedulerPlan extends LitElement {
             .hass=${this.hass}
             .config=${this._params!.cardConfig}
             .value=${group.entities}
+            .devicesOnly=${true}
             multiple
             @value-changed=${(ev: CustomEvent) => this._setMembers(group, ev.detail.value)}
           ></scheduler-entity-picker>` : nothing}
@@ -2663,6 +2664,7 @@ export class DialogSchedulerPlan extends LitElement {
             .hass=${this.hass}
             .config=${this._params!.cardConfig}
             .value=${this._wizard.entities}
+            .devicesOnly=${true}
             multiple
             @value-changed=${(ev: CustomEvent) => setEntities(ev.detail.value)}
           ></scheduler-entity-picker>

@@ -51,15 +51,54 @@ KINDS = {
 
 DEFAULT_KIND = "other"
 
-#: what is worth putting in a schedule at all. A label is put on a device, and
-#: Home Assistant then carries it to every entity that device has - the air
-#: conditioner's switch, and its temperature reading with it. The reading cannot
-#: be switched, so a group is only ever expanded to the entities that can be.
+#: the domains that can be switched at all - a temperature reading is not one
 SCHEDULABLE_DOMAINS = ("light", "switch", "fan", "climate", "input_boolean", "media_player")
 
 
 def is_schedulable(entity_id: str) -> bool:
     return entity_id.split(".")[0] in SCHEDULABLE_DOMAINS
+
+
+def is_a_device_to_schedule(entity_id: str, entry: Any = None) -> bool:
+    """Is this the device itself - the thing a person would name and switch?
+
+    A single air conditioner brings a handful of entities with it: the unit, a
+    child lock, a firmware version, a temperature reading. Only the first is a
+    device as far as a household is concerned, and the rest only make the list
+    of things to choose from harder to read. Home Assistant already marks the
+    others - a category, or hidden - so that mark is what is followed here.
+    """
+    if not is_schedulable(entity_id):
+        return False
+    if entry is None:
+        return True
+    if getattr(entry, "entity_category", None) is not None:
+        return False  # a control for the device, not the device
+    if getattr(entry, "hidden_by", None) or getattr(entry, "disabled_by", None):
+        return False
+    if getattr(entry, "platform", None) == const.DOMAIN:
+        return False  # the scheduler's own switches; scheduling those is a loop
+    return True
+
+
+@callback
+def async_is_a_device_to_schedule(hass: HomeAssistant, entity_id: str) -> bool:
+    """The same question, when only the entity id is in hand."""
+    try:
+        entry = er.async_get(hass).async_get(entity_id)
+    except (KeyError, AttributeError, TypeError):
+        entry = None
+    return is_a_device_to_schedule(entity_id, entry)
+
+
+@callback
+def async_devices_to_schedule(hass: HomeAssistant) -> list[str]:
+    """Every device worth offering, in the order a person would read them."""
+    return sorted(
+        state.entity_id
+        for state in hass.states.async_all()
+        if async_is_a_device_to_schedule(hass, state.entity_id)
+    )
 
 
 def kind_from_domain(entity_id: str) -> str:
@@ -112,6 +151,11 @@ def async_get_book(hass: HomeAssistant) -> dict[str, Any]:
         member_of = [label_ids[x] for x in entry.labels if x in label_ids]
         if not alias and not member_of and entry.entity_id not in kinds:
             continue
+        if not is_a_device_to_schedule(entry.entity_id, entry):
+            # a label goes on the device, and Home Assistant carries it to every
+            # entity that device has. Only the device belongs in the book: the
+            # rest cannot be switched, and a plan that names one does nothing.
+            continue
         for group in member_of:
             groups[group].append(entry.entity_id)
         devices[entry.entity_id] = {
@@ -160,10 +204,9 @@ def async_resolve(hass: HomeAssistant, names: list[str]) -> list[str]:
         if "." in name and hass.states.get(name) is not None:
             candidates = [name]
         elif name in by_group:
-            # a label lands on every entity the device has, so a group named in
-            # a plan brings the air conditioner's temperature reading along with
-            # its switch. Only what can actually be switched belongs in a plan.
-            candidates = [x for x in by_group[name] if is_schedulable(x)]
+            # already only the devices themselves: the book leaves out what a
+            # label picked up along the way
+            candidates = list(by_group[name])
         elif name.lower() in by_name:
             candidates = [by_name[name.lower()]]
         else:
@@ -185,7 +228,13 @@ async def async_set_group(hass: HomeAssistant, group: str, devices: list[str]) -
     if label is None:
         label = labels.async_create(group_label_name(group))
 
-    wanted = set(devices)
+    # a group is for devices; labelling a reading or a child lock would only put
+    # it back in the book by another door
+    wanted = {
+        entity_id
+        for entity_id in devices
+        if is_a_device_to_schedule(entity_id, entities.async_get(entity_id))
+    }
     for entry in list(entities.entities.values()):
         has = label.label_id in entry.labels
         should = entry.entity_id in wanted
@@ -216,6 +265,12 @@ async def async_name_device(hass: HomeAssistant, entity_id: str, name: str | Non
     if entry is None:
         raise ValueError(
             f"'{entity_id}' is not a registered entity. Its id looks like 'light.salon'."
+        )
+    if name and not is_a_device_to_schedule(entity_id, entry):
+        raise ValueError(
+            f"'{entity_id}' cannot be switched on and off, so a schedule has nothing "
+            "to tell it. Name the device itself instead - a temperature reading, a "
+            "firmware version or a child lock is not one."
         )
     entities.async_update_entity(entity_id, aliases={name} if name else set())
 
