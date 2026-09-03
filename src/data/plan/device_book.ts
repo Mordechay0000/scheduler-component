@@ -31,6 +31,10 @@ export const fetchDeviceBook = (hass: HomeAssistant): Promise<DeviceBook> =>
 export const setDeviceGroup = (hass: HomeAssistant, group: string, devices: string[]): Promise<DeviceBook> =>
   hass.callWS({ type: 'scheduler/device_book/group', group, devices });
 
+/** take a device out of the book: its name, its groups and its kind */
+export const forgetDevice = (hass: HomeAssistant, entity_id: string): Promise<DeviceBook> =>
+  hass.callWS({ type: 'scheduler/device_book/forget', entity_id });
+
 export const nameDevice = (
   hass: HomeAssistant,
   entity_id: string,

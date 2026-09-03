@@ -34,6 +34,7 @@ import {
   DeviceBook,
   EMPTY_BOOK,
   fetchDeviceBook,
+  forgetDevice,
   groupDevices,
   nameDevice,
   setDeviceGroup,
@@ -198,6 +199,10 @@ export class DialogSchedulerPlan extends LitElement {
   @state() private _book: DeviceBook = EMPTY_BOOK;
   @state() private _bookOpen = false;
   @state() private _newGroup = "";
+
+  /** groups typed in but not yet holding a device; a label with no members
+   *  cannot exist in Home Assistant, so it waits here until one joins */
+  @state() private _draftGroups: string[] = [];
   /** the household's own preferences: colours, and the times it keeps */
   @state() private _prefs: PlanPrefs = loadPrefs();
   /** unmistakable green/grey for on and off, rather than shades of the action */
@@ -1419,6 +1424,11 @@ export class DialogSchedulerPlan extends LitElement {
    * a temperature or a brightness.
    */
   private _renderBook() {
+    const devices = [...this._book.devices].sort((a, b) => a.name.localeCompare(b.name));
+    const groups = [
+      ...this._book.groups.map(g => g.name),
+      ...this._draftGroups.filter(name => !this._book.groups.some(g => g.name == name)),
+    ];
     return html`
       <div class="book">
         <div class="book-head">
@@ -1433,19 +1443,24 @@ export class DialogSchedulerPlan extends LitElement {
 
         <div class="book-body">
           <div class="book-groups">
-            ${this._book.groups.map(group => html`
+            <span class="field-label">${this._t('book.groups')}</span>
+            ${groups.length ? groups.map(name => {
+      const members = this._book.groups.find(g => g.name == name)?.devices || [];
+      return html`
             <div class="book-group">
-              <span class="book-group-name">${group.name}</span>
+              <span class="book-group-name">${name}</span>
               <span class="book-group-count">
-                ${this._t('group.members', '{n}', String(group.devices.length))}
+                ${this._t('group.members', '{n}', String(members.length))}
               </span>
-              <button class="ghost small" @click=${() => this._useGroup(group.name)}>
+              <button class="ghost small" ?disabled=${!members.length}
+                @click=${() => this._useGroup(name)}>
                 ${this._t('book.use')}
               </button>
-              <button class="ghost small danger" @click=${() => this._saveGroup(group.name, [])}>
+              <button class="ghost small danger" @click=${() => this._removeGroup(name)}>
                 ${hassLocalize('ui.common.delete', this.hass)}
               </button>
-            </div>`)}
+            </div>`;
+    }) : html`<span class="hint">${this._t('book.no_groups')}</span>`}
 
             <div class="book-group new">
               <input
@@ -1453,29 +1468,48 @@ export class DialogSchedulerPlan extends LitElement {
                 .value=${this._newGroup}
                 placeholder=${this._t('book.new_group')}
                 @input=${(ev: Event) => { this._newGroup = (ev.target as HTMLInputElement).value; }}
+                @keydown=${(ev: KeyboardEvent) => { if (ev.key == 'Enter') this._addDraftGroup(); }}
               />
-              <button
-                class="ghost small"
-                ?disabled=${!this._newGroup.trim() || !this._selectedGroupEntities().length}
-                @click=${() => this._saveGroup(this._newGroup.trim(), this._selectedGroupEntities())}
-              >${this._t('book.from_selection')}</button>
+              <button class="ghost small" ?disabled=${!this._newGroup.trim()}
+                @click=${this._addDraftGroup}>
+                ${this._t('book.add_group')}
+              </button>
             </div>
+            <span class="hint">${this._t('book.groups_hint')}</span>
           </div>
 
           <div class="book-devices">
-            ${this._selectedGroupEntities().map(entity => this._renderBookDevice(entity))}
+            <span class="field-label">${this._t('book.devices')}</span>
+            ${devices.length
+        ? devices.map(device => this._renderBookDevice(device.entity_id, groups))
+        : html`<span class="hint">${this._t('book.no_devices')}</span>`}
+
+            <div class="book-add">
+              <span class="field-label">${this._t('book.add')}</span>
+              <span class="hint">${this._t('book.add_hint')}</span>
+              <scheduler-entity-picker
+                .hass=${this.hass}
+                .config=${this._params!.cardConfig}
+                .devicesOnly=${true}
+                .value=${[]}
+                @value-changed=${(ev: CustomEvent) => this._addToBook(ev.detail.value)}
+              ></scheduler-entity-picker>
+            </div>
           </div>
         </div>
       </div>
     `;
   }
 
-  private _renderBookDevice(entity: string) {
+  private _renderBookDevice(entity: string, groups: string[]) {
     const entry = this._book.devices.find(d => d.entity_id == entity);
     const kinds = this._book.kinds.length ? this._book.kinds : ['light', 'switch', 'climate', 'other'];
+    const inGroup = (name: string) => (this._book.groups.find(g => g.name == name)?.devices || []).includes(entity);
     return html`
       <div class="device-row">
-        <span class="device-label">${this.hass.states[entity]?.attributes.friendly_name || entity}</span>
+        <span class="device-label" title=${entity}>
+          ${this.hass.states[entity]?.attributes.friendly_name || entity}
+        </span>
         <input
           class="moment-name"
           .value=${entry?.alias || ''}
@@ -1490,12 +1524,60 @@ export class DialogSchedulerPlan extends LitElement {
               ${this._t(`book.kind.${kind}`) || kind}
             </option>`)}
         </select>
+        <button class="icon-only danger" title=${this._t('book.remove')}
+          @click=${() => this._forgetDevice(entity)}>
+          <ha-svg-icon .path=${mdiClose}></ha-svg-icon>
+        </button>
+        ${groups.length ? html`
+        <div class="book-group-chips">
+          ${groups.map(name => html`
+          <button class="chip ${inGroup(name) ? 'on' : ''}"
+            @click=${() => this._toggleGroupMember(name, entity)}>
+            ${name}
+          </button>`)}
+        </div>` : nothing}
       </div>
     `;
   }
 
-  private _selectedGroupEntities() {
-    return this._selectedCube()?.group.entities || this._plan.groups[0]?.entities || [];
+  /** a group with no devices yet exists only here, until something joins it */
+  private _addDraftGroup = () => {
+    const name = this._newGroup.trim();
+    if (!name) return;
+    if (!this._draftGroups.includes(name)) this._draftGroups = [...this._draftGroups, name];
+    this._newGroup = '';
+  };
+
+  private async _toggleGroupMember(group: string, entity: string) {
+    const members = this._book.groups.find(g => g.name == group)?.devices || [];
+    const next = members.includes(entity)
+      ? members.filter(e => e != entity)
+      : [...members, entity];
+    await this._saveGroup(group, next);
+  }
+
+  private async _removeBookGroup(name: string) {
+    this._draftGroups = this._draftGroups.filter(g => g != name);
+    if (this._book.groups.some(g => g.name == name)) await this._saveGroup(name, []);
+  }
+
+  /**
+   * Putting a device in the book means giving it a name, and its own is the
+   * obvious first one - the household edits it right there if it wants another.
+   */
+  private async _addToBook(value: string | string[]) {
+    const entity = Array.isArray(value) ? value[value.length - 1] : value;
+    if (!entity || this._book.devices.some(d => d.entity_id == entity)) return;
+    const name = this.hass.states[entity]?.attributes.friendly_name || entity;
+    await this._nameDevice(entity, { name });
+  }
+
+  private async _forgetDevice(entity: string) {
+    try {
+      this._book = await forgetDevice(this.hass, entity);
+    } catch (err) {
+      this._reportError(err);
+    }
   }
 
   private async _saveGroup(name: string, devices: string[]) {
@@ -3553,6 +3635,27 @@ export class DialogSchedulerPlan extends LitElement {
       .book-group-name { font-size: 13px; font-weight: 600; flex: 1; }
       .book-group-count { font-size: 11px; color: var(--secondary-text-color); }
       .book-devices { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 280px; }
+      .book-devices .device-row { align-items: center; }
+      .book-devices .device-label { flex: 1; min-width: 150px; }
+      .book-group-chips { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+      .book-group-chips .chip {
+        font-size: 11px;
+        padding: 2px 8px;
+        opacity: 0.6;
+      }
+      .book-group-chips .chip.on {
+        opacity: 1;
+        border-color: rgba(var(--plan-on), 0.9);
+        background: rgba(var(--plan-on), 0.14);
+      }
+      .book-add {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--divider-color);
+      }
 
       .swatches { display: flex; flex-wrap: wrap; gap: 6px; max-width: 240px; }
 

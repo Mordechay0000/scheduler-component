@@ -42,6 +42,12 @@ const page = ({ anchors = true, schedule = null } = {}) => buildPage({
             ? [...window.__book.groups.filter(g => g.name !== req.group), { name: req.group, devices: req.devices }]
             : window.__book.groups.filter(g => g.name !== req.group);
         }
+        if (req.type === 'scheduler/device_book/forget') {
+          window.__book.devices = window.__book.devices.filter(d => d.entity_id !== req.entity_id);
+          window.__book.groups = window.__book.groups
+            .map(g => ({ ...g, devices: g.devices.filter(e => e !== req.entity_id) }))
+            .filter(g => g.devices.length);
+        }
         if (req.type === 'scheduler/device_book/device') {
           window.__book.devices = [
             ...window.__book.devices.filter(d => d.entity_id !== req.entity_id),
@@ -1305,11 +1311,9 @@ export default async function run() {
   await withPage(page(), async p => {
     const made = await p.evaluate(async () => {
       const dialog = window.__dialog;
-      dialog._setMembers(dialog._plan.groups[0], ['climate.salon', 'climate.bedroom']);
       dialog._bookOpen = true;
-      dialog._newGroup = 'מזגנים';
       await dialog.updateComplete;
-      await dialog._saveGroup('מזגנים', dialog._selectedGroupEntities());
+      await dialog._saveGroup('מזגנים', ['climate.salon', 'climate.bedroom']);
       await dialog.updateComplete;
       return {
         request: window.__wsCalls.find(r => r.type === 'scheduler/device_book/group'),
@@ -1317,7 +1321,7 @@ export default async function run() {
       };
     });
 
-    s.ok(made.request.group === 'מזגנים', 'a group is created from the devices at hand');
+    s.ok(made.request.group === 'מזגנים', 'a group is created from the devices put in it');
     s.ok(made.request.devices.length === 2, 'with all of them in it');
     s.ok(made.groups.includes('מזגנים'), 'and it comes back in the book');
   }, JERUSALEM);
@@ -1403,15 +1407,52 @@ export default async function run() {
   }, JERUSALEM);
 
   await withPage(page(), async p => {
-    await p.evaluate(async () => {
+    const rows = await p.evaluate(async () => {
       const dialog = window.__dialog;
       dialog._setMembers(dialog._plan.groups[0], ['climate.salon']);
       dialog._bookOpen = true;
       await dialog.updateComplete;
+      return dialog.shadowRoot.querySelectorAll('.book-devices .device-row').length;
     });
     s.ok(await count_(p, '.book') === 1, 'the book opens in the editor');
-    s.ok(await count_(p, '.book-devices .device-row') === 1,
-      'showing the devices of the group being edited');
+    s.ok(rows === 0,
+      'and it is empty until something is put in it - a device in the plan is not in the book');
+
+    const after = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      await dialog._addToBook('climate.bedroom');
+      await dialog.updateComplete;
+      return {
+        rows: dialog.shadowRoot.querySelectorAll('.book-devices .device-row').length,
+        named: dialog._book.devices.map(d => d.name),
+      };
+    });
+    s.ok(after.rows === 1, 'a device is added to the book by hand, from anywhere in Home Assistant');
+    s.ok(after.named.includes('מזגן חדר'),
+      'and starts under the name Home Assistant already has for it');
+
+    const grouped = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._newGroup = 'מזגנים';
+      dialog._addDraftGroup();
+      await dialog.updateComplete;
+      const empty = dialog._book.groups.length;
+      await dialog._toggleGroupMember('מזגנים', 'climate.bedroom');
+      await dialog.updateComplete;
+      return { empty, groups: dialog._book.groups };
+    });
+    s.ok(grouped.empty === 0, 'a new group is only a name until a device joins it');
+    s.ok(grouped.groups[0].devices.includes('climate.bedroom'),
+      'and ticking a device in is what creates it');
+
+    const emptied = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      await dialog._forgetDevice('climate.bedroom');
+      await dialog.updateComplete;
+      return { devices: dialog._book.devices.length, groups: dialog._book.groups.length };
+    });
+    s.ok(emptied.devices === 0 && emptied.groups === 0,
+      'and taking it out again leaves nothing of it behind');
   }, JERUSALEM);
 
   // --- reopening a saved plan ---------------------------------------------

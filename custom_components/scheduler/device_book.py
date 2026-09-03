@@ -22,6 +22,7 @@ The third has nowhere native to live:
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -273,6 +274,34 @@ async def async_name_device(hass: HomeAssistant, entity_id: str, name: str | Non
             "firmware version or a child lock is not one."
         )
     entities.async_update_entity(entity_id, aliases={name} if name else set())
+
+
+async def async_forget_device(hass: HomeAssistant, entity_id: str) -> None:
+    """Take a device out of the book entirely.
+
+    A device is in the book because it has a name, a group, or a corrected
+    kind. Removing it has to undo all three, or it comes straight back the next
+    time the book is read - which is exactly what "remove" must not do.
+    """
+    entities = er.async_get(hass)
+    entry = entities.async_get(entity_id)
+    if entry is None:
+        raise ValueError(
+            f"'{entity_id}' is not a registered entity. Its id looks like 'light.salon'."
+        )
+
+    labels = lr.async_get(hass)
+    keep = {
+        label_id
+        for label_id in entry.labels
+        if group_from_label((labels.async_get_label(label_id) or _NO_LABEL).name) is None
+    }
+    entities.async_update_entity(entity_id, aliases=set(), labels=keep)
+    async_set_kind(hass, entity_id, None)
+
+
+#: stands in for a label that has gone while we were reading it
+_NO_LABEL = SimpleNamespace(name="")
 
 
 @callback

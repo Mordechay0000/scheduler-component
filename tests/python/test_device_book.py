@@ -16,6 +16,7 @@ from scheduler.device_book import (
     GROUP_LABEL_PREFIX,
     KINDS,
     async_can,
+    async_forget_device,
     async_get_book,
     async_kind_of,
     async_name_device,
@@ -42,6 +43,9 @@ class FakeLabelRegistry:
 
     def async_list_labels(self):
         return list(self.labels.values())
+
+    def async_get_label(self, label_id):
+        return self.labels.get(label_id)
 
     def async_get_label_by_name(self, name):
         return next((x for x in self.labels.values() if x.name == name), None)
@@ -219,6 +223,35 @@ def test_a_kind_that_is_not_one_says_which_are(book):
     with pytest.raises(ValueError) as err:
         async_set_kind(book.hass, "light.salon", "aircon")
     assert all(kind in str(err.value) for kind in ("climate", "light"))
+
+
+def test_a_device_can_be_taken_out_of_the_book(book):
+    """Removing has to undo all three, or the book reads it straight back in."""
+    import asyncio
+
+    asyncio.run(async_name_device(book.hass, "switch.ac_salon", "מזגן סלון"))
+    asyncio.run(async_set_group(book.hass, "מזגנים", ["switch.ac_salon", "light.ac_bedroom"]))
+    async_set_kind(book.hass, "switch.ac_salon", "climate")
+
+    asyncio.run(async_forget_device(book.hass, "switch.ac_salon"))
+
+    listed = [d["entity_id"] for d in async_get_book(book.hass)["devices"]]
+    assert "switch.ac_salon" not in listed
+    assert async_get_book(book.hass)["groups"][0]["devices"] == ["light.ac_bedroom"]
+    assert async_kind_of(book.hass, "switch.ac_salon") == "switch"  # back to its domain
+
+
+def test_forgetting_a_device_leaves_the_household_s_other_labels_alone(book):
+    """Somebody else's label is not the scheduler's to remove."""
+    import asyncio
+
+    mine = book.labels.async_create("Downstairs")
+    book.entities.entities["switch.ac_salon"].labels = {mine.label_id}
+    asyncio.run(async_set_group(book.hass, "מזגנים", ["switch.ac_salon"]))
+
+    asyncio.run(async_forget_device(book.hass, "switch.ac_salon"))
+
+    assert book.entities.entities["switch.ac_salon"].labels == {mine.label_id}
 
 
 # --- using the names --------------------------------------------------------

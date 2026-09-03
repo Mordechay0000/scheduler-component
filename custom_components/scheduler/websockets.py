@@ -11,6 +11,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from . import const
 from .device_book import (
     KINDS,
+    async_forget_device,
     async_get_book,
     async_name_device,
     async_remove_group,
@@ -132,6 +133,19 @@ async def websocket_name_device(hass, connection, msg):
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_device", str(err))
         return
+    connection.send_result(msg["id"], async_get_book(hass))
+
+
+@decorators.async_response
+async def websocket_forget_device(hass, connection, msg):
+    """Take a device out of the book: its name, its groups and its kind."""
+    try:
+        await async_forget_device(hass, msg["entity_id"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_device", str(err))
+        return
+    coordinator = hass.data[const.DOMAIN]["coordinator"]
+    coordinator.store.async_set_device_kind(msg["entity_id"], None)
     connection.send_result(msg["id"], async_get_book(hass))
 
 
@@ -342,6 +356,18 @@ async def async_register_websockets(hass):
                 vol.Required("entity_id"): cv.entity_id,
                 vol.Optional("name"): vol.Any(cv.string, None),
                 vol.Optional("kind"): vol.Any(vol.In(sorted(KINDS)), None),
+            }
+        ),
+    )
+
+    websocket_api.async_register_command(
+        hass,
+        "{}/device_book/forget".format(const.DOMAIN),
+        websocket_forget_device,
+        websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+            {
+                vol.Required("type"): "{}/device_book/forget".format(const.DOMAIN),
+                vol.Required("entity_id"): cv.entity_id,
             }
         ),
     )
