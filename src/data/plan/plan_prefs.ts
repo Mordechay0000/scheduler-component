@@ -33,10 +33,16 @@ export interface EndTime {
   before?: boolean;
 }
 
-/** one of the moments the wizard offers, with the time this household uses */
+/**
+ * One of the parts the wizard offers, with the time this household uses.
+ *
+ * A time, and nothing else. What the devices do in that part is never a
+ * household default: one house wants the salon air conditioner on during the
+ * meal and the bedrooms off, the next wants the opposite, and guessing on
+ * their behalf is how a plan ends up wrong in a way nobody notices.
+ */
 export interface MomentDefault extends EndTime {
   key: string;
-  on: boolean;
 }
 
 export interface PlanPrefs {
@@ -54,12 +60,12 @@ export interface PlanPrefs {
  * for.
  */
 export const DEFAULT_MOMENTS: MomentDefault[] = [
-  { key: 'meal_eve', when: 'sunset', time: '01:30', before: false, on: true },
-  { key: 'sleep', when: 'clock', time: '23:00', on: false },
-  { key: 'morning', when: 'clock', time: '07:00', on: true },
-  { key: 'meal_day', when: 'clock', time: '12:00', on: true },
-  { key: 'nap', when: 'clock', time: '14:30', on: false },
-  { key: 'close', when: 'end', time: '00:30', before: true, on: true },
+  { key: 'meal_eve', when: 'sunset', time: '01:30', before: false },
+  { key: 'sleep', when: 'clock', time: '23:00' },
+  { key: 'morning', when: 'clock', time: '07:00' },
+  { key: 'meal_day', when: 'clock', time: '12:00' },
+  { key: 'nap', when: 'clock', time: '14:30' },
+  { key: 'close', when: 'end', time: '00:30', before: true },
 ];
 
 export const DEFAULT_PREFS: PlanPrefs = {
@@ -83,7 +89,6 @@ const readMoment = (stored: any, fallback: MomentDefault): MomentDefault => {
     when,
     time: /^\d{1,2}:\d{2}$/.test(stored.time) ? stored.time : fallback.time,
     before: typeof stored.before == 'boolean' ? stored.before : fallback.before,
-    on: typeof stored.on == 'boolean' ? stored.on : fallback.on,
   };
 };
 

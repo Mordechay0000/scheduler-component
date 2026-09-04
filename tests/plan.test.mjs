@@ -599,7 +599,7 @@ export default async function run() {
       window.__dialog.shadowRoot.querySelector('.report-list li').textContent.replace(/\s+/g, ' '));
     s.ok(first.includes('סלון') && first.includes('פלטה'),
       'each stretch says what every device does');
-    s.ok(first.includes('לא בקובייה') || !first.includes('undefined'),
+    s.ok(first.includes('לא בקטע הזה') || !first.includes('undefined'),
       'and a device the stretch leaves out is marked as such');
   }, JERUSALEM);
 
@@ -655,7 +655,7 @@ export default async function run() {
     });
 
     s.ok(marked.untouched === 1, 'the row is greyed and dashed so it cannot be mistaken');
-    s.ok(marked.chosen.includes('לא בקובייה'), 'and "not in this stretch" is the chosen state');
+    s.ok(marked.chosen.includes('לא בקטע הזה'), 'and "not in this stretch" is the chosen state');
   }, JERUSALEM);
 
   await withPage(page(), async p => {
@@ -668,7 +668,7 @@ export default async function run() {
       return dialog.shadowRoot.querySelector('.report-list li').textContent.replace(/\s+/g, ' ');
     });
 
-    s.ok(shown.includes('לא בקובייה'), 'the report says which devices are left alone');
+    s.ok(shown.includes('לא בקטע הזה'), 'the report says which devices are left alone');
   }, JERUSALEM);
 
   // --- one button, one behaviour -------------------------------------------
@@ -741,11 +741,16 @@ export default async function run() {
       const dialog = window.__dialog;
       dialog._wizard = {
         entities: ['light.salon', 'switch.boiler'],
-        onAtCandleLighting: true,
+        opening: {
+          'light.salon': { service: 'light.turn_on', service_data: {} },
+          'switch.boiler': { service: 'switch.turn_on', service_data: {} },
+        },
         moments: [
           // deliberately out of order: the wizard puts the day in sequence
-          { id: 'a', name: 'בוקר', when: 'clock', time: '06:30', on: true },
-          { id: 'b', name: 'שינה', when: 'clock', time: '22:30', on: false },
+          { id: 'a', name: 'בוקר', when: 'clock', time: '06:30',
+            states: { 'light.salon': { service: 'light.turn_on', service_data: {} } } },
+          { id: 'b', name: 'שינה', when: 'clock', time: '22:30',
+            states: { 'light.salon': { service: 'light.turn_off', service_data: {} } } },
         ],
       };
       dialog._finishWizard();
@@ -771,14 +776,21 @@ export default async function run() {
     const call = await p.evaluate(async () => {
       const dialog = window.__dialog;
       dialog._wizardStep = 4;
-      dialog._wizard = { ...dialog._wizard, entities: ['light.salon'], onAtCandleLighting: true };
+      dialog._wizard = {
+        ...dialog._wizard,
+        entities: ['light.salon'],
+        opening: { 'light.salon': { service: 'light.turn_on', service_data: {} } },
+      };
       // the presets are a starting point, and anything can be added by hand
-      dialog._addMoment({ key: 'meal_eve', when: 'clock', time: '20:00', on: true });
-      dialog._addMoment({ key: 'meal_day', when: 'clock', time: '12:00', on: true });
+      dialog._addMoment({ key: 'meal_eve', when: 'clock', time: '20:00' });
+      dialog._addMoment({ key: 'meal_day', when: 'clock', time: '12:00' });
       dialog._addMoment();
       const own = dialog._wizard.moments[2];
-      dialog._updateMoment(own.id, { name: 'שנת צהריים', when: 'clock', time: '14:30', on: false });
-      dialog._addMoment({ key: 'close', when: 'end', time: '00:30', before: true, on: true });
+      dialog._updateMoment(own.id, {
+        name: 'שנת צהריים', when: 'clock', time: '14:30',
+        states: { 'light.salon': { service: 'light.turn_off', service_data: {} } },
+      });
+      dialog._addMoment({ key: 'close', when: 'end', time: '00:30', before: true });
       await dialog.updateComplete;
       dialog._finishWizard();
       await dialog.updateComplete;
@@ -806,11 +818,11 @@ export default async function run() {
       };
       dialog._wizard = {
         entities: ['light.salon'],
-        onAtCandleLighting: true,
+        opening: { 'light.salon': { service: 'light.turn_on', service_data: {} } },
         moments: [
-          { id: 'a', name: 'סעודה', when: 'clock', time: '12:00', on: true },
+          { id: 'a', name: 'סעודה', when: 'clock', time: '12:00', states: {} },
           // an evening reading before candle lighting: outside the band
-          { id: 'b', name: 'מוקדם מדי', when: 'clock', time: '17:00', on: true },
+          { id: 'b', name: 'מוקדם מדי', when: 'clock', time: '17:00', states: {} },
         ],
       };
       goTo('review');
@@ -844,10 +856,14 @@ export default async function run() {
       const dialog = window.__dialog;
       dialog._wizard = {
         entities: ['climate.salon', 'climate.bedroom', 'light.salon'],
-        onAtCandleLighting: false,
+        opening: {
+          'climate.salon': { service: 'climate.turn_off', service_data: {} },
+          'climate.bedroom': { service: 'climate.turn_off', service_data: {} },
+          'light.salon': { service: 'light.turn_off', service_data: {} },
+        },
         moments: [
-          { id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', on: false },
-          { id: 'night', name: 'שינה', when: 'clock', time: '23:00', on: false },
+          { id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', states: {} },
+          { id: 'night', name: 'שינה', when: 'clock', time: '23:00', states: {} },
         ],
       };
       dialog._wizardStep = 4;
@@ -859,6 +875,10 @@ export default async function run() {
       dialog._setMomentDevice('meal', 'light.salon',
         { service: 'light.turn_on', service_data: { brightness_pct: 40 } });
       // afterwards the other way round
+      dialog._setMomentDevice('night', 'climate.salon',
+        { service: 'climate.turn_off', service_data: {} });
+      dialog._setMomentDevice('night', 'light.salon',
+        { service: 'light.turn_off', service_data: {} });
       dialog._setMomentDevice('night', 'climate.bedroom',
         { service: 'climate.set_temperature', service_data: { temperature: 24 } });
 
@@ -877,11 +897,82 @@ export default async function run() {
       'the wizard carries a per-device temperature through');
     s.ok(at('סעודה')['climate.bedroom'].service.endsWith('turn_off'),
       'while another device in the same moment stays off');
+    s.ok(!('climate.salon' in at('סעודה')) === false,
+      'every device the part decided is written out');
     s.ok(at('סעודה')['light.salon'].service_data.brightness_pct === 40,
       'and a brightness alongside it');
     s.ok(at('שינה')['climate.bedroom'].service_data.temperature === 24
       && at('שינה')['climate.salon'].service.endsWith('turn_off'),
       'and the next moment is the other way round, as the generator needs');
+  }, JERUSALEM);
+
+  // --- nothing is assumed about what a device should be doing --------------
+  //
+  // There is no "the plan starts on". One house wants the salon air
+  // conditioner running when Shabbat comes in and the bedrooms off; the next
+  // wants exactly the opposite. So every device is asked, and until every one
+  // has an answer there is nothing to build.
+
+  await withPage(page(), async p => {
+    const asked = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      const goTo = (kind, id) => {
+        const steps = dialog._wizardSteps;
+        dialog._wizardStep = steps.findIndex(x => x.kind === kind && (id === undefined || x.moment === id));
+      };
+      dialog._wizard = {
+        entities: ['climate.salon', 'climate.bedroom'],
+        opening: {},
+        moments: [{ id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', states: {} }],
+      };
+      goTo('opening');
+      await dialog.updateComplete;
+      const step = () => dialog._wizardSteps[dialog._wizardStep];
+      const before = {
+        undecided: dialog.shadowRoot.querySelectorAll('.device-row.undecided').length,
+        chosen: dialog.shadowRoot.querySelectorAll('.segmented.states button.active').length,
+        blocked: dialog._wizardBlocked(step()),
+      };
+
+      dialog._setMomentDevice('', 'climate.salon', { service: 'climate.turn_on', service_data: {} });
+      await dialog.updateComplete;
+      const half = { blocked: dialog._wizardBlocked(step()) };
+
+      dialog._setMomentDevice('', 'climate.bedroom', null);
+      await dialog.updateComplete;
+      const done = {
+        blocked: dialog._wizardBlocked(step()),
+        undecided: dialog.shadowRoot.querySelectorAll('.device-row.undecided').length,
+      };
+
+      // the next part changes one device and says nothing about the other
+      goTo('part', 'meal');
+      await dialog.updateComplete;
+      const carried = dialog.shadowRoot.querySelectorAll('.device-row .follows').length;
+      dialog._setMomentDevice('meal', 'climate.bedroom',
+        { service: 'climate.turn_on', service_data: {} });
+      dialog._finishWizard();
+      await dialog.updateComplete;
+      const cubes = dialog._plan.groups[0].cubes.map(c => ({
+        name: c.name,
+        devices: Object.fromEntries(Object.entries(c.devices).map(([k, v]) => [k, v.service])),
+      }));
+      return { before, half, done, carried, cubes };
+    });
+
+    s.ok(asked.before.chosen === 0,
+      'no device arrives at candle lighting with a state already picked for it');
+    s.ok(asked.before.undecided === 2, 'each one says out loud that it is still unanswered');
+    s.ok(asked.before.blocked && asked.half.blocked && !asked.done.blocked,
+      'and the wizard waits until every one of them has been answered');
+    s.ok(asked.done.undecided === 0, '"not in this part" is an answer like any other');
+    s.ok(asked.carried >= 1, 'a later part shows what carries on from the part before it');
+    s.ok(asked.cubes[0].devices['climate.salon'].endsWith('turn_on')
+      && !('climate.bedroom' in asked.cubes[0].devices),
+      'the opening writes exactly what was chosen, and leaves out what was excluded');
+    s.ok(asked.cubes[1].devices['climate.salon'].endsWith('turn_on')
+      && asked.cubes[1].devices['climate.bedroom'].endsWith('turn_on'),
+      'and the next part carries the untouched device forward rather than dropping it');
   }, JERUSALEM);
 
   // --- one screen, one question --------------------------------------------
@@ -899,10 +990,10 @@ export default async function run() {
       };
       dialog._wizard = {
         entities: ['climate.salon', 'light.salon'],
-        onAtCandleLighting: true,
+        opening: { 'light.salon': { service: 'light.turn_on', service_data: {} } },
         moments: [
-          { id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', on: true },
-          { id: 'night', name: 'שינה', when: 'clock', time: '23:00', on: false },
+          { id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', states: {} },
+          { id: 'night', name: 'שינה', when: 'clock', time: '23:00', states: {} },
         ],
       };
       await dialog.updateComplete;
@@ -1092,8 +1183,8 @@ export default async function run() {
       dialog._wizardStep = 3;
       dialog._wizard = {
         entities: ['light.salon'],
-        onAtCandleLighting: true,
-        moments: [{ id: 'a', name: 'סעודה', when: 'sunset', time: '01:30', before: false, on: true }],
+        opening: { 'light.salon': { service: 'light.turn_on', service_data: {} } },
+        moments: [{ id: 'a', name: 'סעודה', when: 'sunset', time: '01:30', before: false, states: {} }],
       };
       await dialog.updateComplete;
 
@@ -1141,9 +1232,9 @@ export default async function run() {
 
       dialog._wizard = {
         entities: ['light.salon'],
-        onAtCandleLighting: true,
+        opening: {},
         // 17:00 on the opening day is before candle lighting: outside the band
-        moments: [{ id: 'a', name: 'מוקדם מדי', when: 'clock', time: '17:00', on: true }],
+        moments: [{ id: 'a', name: 'מוקדם מדי', when: 'clock', time: '17:00', states: {} }],
       };
       goTo('part', 'a');
       await dialog.updateComplete;
@@ -1186,10 +1277,10 @@ export default async function run() {
       };
       dialog._wizard = {
         entities: ['light.salon'],
-        onAtCandleLighting: true,
+        opening: { 'light.salon': { service: 'light.turn_on', service_data: {} } },
         moments: [
-          { id: 'a', name: 'שינה', when: 'clock', time: '22:30', on: false },
-          { id: 'b', name: 'מוצאי', when: 'end', time: '00:30', before: true, on: true },
+          { id: 'a', name: 'שינה', when: 'clock', time: '22:30', states: {} },
+          { id: 'b', name: 'מוצאי', when: 'end', time: '00:30', before: true, states: {} },
         ],
       };
       goTo('part', 'a');
@@ -1274,7 +1365,7 @@ export default async function run() {
 
       dialog._settingsOpen = false;
       dialog._wizardStep = 3;
-      dialog._wizard = { entities: ['light.salon'], onAtCandleLighting: true, moments: [] };
+      dialog._wizard = { entities: ['light.salon'], opening: {}, moments: [] };
       await dialog.updateComplete;
       dialog._addMoment(dialog._prefs.moments.find(m => m.key === 'meal_eve'));
       dialog._addMoment(dialog._prefs.moments.find(m => m.key === 'sleep'));
@@ -1337,7 +1428,7 @@ export default async function run() {
       dialog._wizard = {
         ...dialog._wizard,
         entities: ['light.salon'],
-        moments: [{ id: 'a', name: 'סעודה', when: 'clock', time: '22:30', on: true }],
+        moments: [{ id: 'a', name: 'סעודה', when: 'clock', time: '22:30', states: {} }],
       };
       dialog._wizardStep = dialog._wizardSteps.findIndex(x => x.kind === 'part');
       await dialog.updateComplete;
@@ -1363,8 +1454,8 @@ export default async function run() {
       const dialog = window.__dialog;
       dialog._wizard = {
         entities: ['light.salon'],
-        onAtCandleLighting: true,
-        moments: [{ id: 'a', name: 'שינה', when: 'clock', time: '22:30', on: false }],
+        opening: { 'light.salon': { service: 'light.turn_on', service_data: {} } },
+        moments: [{ id: 'a', name: 'שינה', when: 'clock', time: '22:30', states: {} }],
         hold: false,
       };
       dialog._wizardStep = 5;

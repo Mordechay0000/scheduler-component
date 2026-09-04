@@ -126,18 +126,28 @@ interface WizardStep {
  */
 type WizardWhen = EndKind;
 
+/**
+ * What the devices do in one part, one device at a time.
+ *
+ * An Action is what to do; null is "this part does not touch it"; and a device
+ * missing from the map has not been decided at all. There is deliberately no
+ * state for the part as a whole: a house on one generator wants the salon air
+ * conditioner on and the bedrooms off in the very same part, so "the meal is
+ * on" is not a thing that can be true.
+ */
+type WizardStates = Record<string, Action | null>;
+
 type WizardMoment = EndTime & {
   id: string;
   name: string;
-  on: boolean;
-  /** what individual devices do from this moment, when they differ */
-  overrides?: Record<string, Action>;
+  /** only what this part changes; everything else carries on from the one before */
+  states: WizardStates;
 };
 
 type WizardAnswers = {
   entities: string[];
-  onAtCandleLighting: boolean;
-  openingOverrides?: Record<string, Action>;
+  /** what each device does from candle lighting - asked, never assumed */
+  opening: WizardStates;
   moments: WizardMoment[];
   /** put a device back if something else moves it during the plan */
   hold?: boolean;
@@ -193,7 +203,7 @@ export class DialogSchedulerPlan extends LitElement {
   @state() private _offerWizard = false;
   @state() private _wizard: WizardAnswers = {
     entities: [],
-    onAtCandleLighting: true,
+    opening: {},
     moments: [],
     hold: HOLDS_BY_DEFAULT,
   };
@@ -246,7 +256,7 @@ export class DialogSchedulerPlan extends LitElement {
     this._plainColours = this._prefs.plainColours;
     this._wizard = {
       entities: [],
-      onAtCandleLighting: true,
+      opening: {},
       moments: [],
       hold: HOLDS_BY_DEFAULT,
     };
@@ -1386,16 +1396,6 @@ export class DialogSchedulerPlan extends LitElement {
           <div class="moment">
             <span class="moment-fixed-name">${this._t(`wizard.preset.${preset.key}`)}</span>
             ${this._endPicker(preset, changes => this._setDefaultMoment(preset.key, changes))}
-            <div class="segmented states">
-              <button class="on ${preset.on ? 'active' : ''}"
-                @click=${() => this._setDefaultMoment(preset.key, { on: true })}>
-                ${this._t('state.on')}
-              </button>
-              <button class="off ${preset.on ? '' : 'active'}"
-                @click=${() => this._setDefaultMoment(preset.key, { on: false })}>
-                ${this._t('state.off')}
-              </button>
-            </div>
             <span class="moment-at">${this._formatMoment(this._momentBoundary(preset))}</span>
           </div>`)}
         </div>
@@ -2127,34 +2127,38 @@ export class DialogSchedulerPlan extends LitElement {
     entity: string,
     action: Action | undefined,
     onChange: (action: Action) => void,
-    onClear: () => void
+    onClear: () => void,
+    /** the wizard also has "nobody has said yet", which is not a state */
+    pending?: { undecided?: boolean; note?: string }
   ) {
     const domain = entity.split('.')[0];
-    const untouched = !action;
+    const undecided = !!pending?.undecided;
+    const untouched = !action && !undecided;
     const off = action ? isOffAction(action) : false;
     const current = action || plainAction(entity, true);
     const set = (changes: Partial<Action>) => onChange({ ...current, ...changes });
+    const note = pending?.note || (untouched ? this._t('device.untouched_hint') : '');
 
     return html`
-      <div class="device-row ${untouched ? 'untouched' : ''}">
+      <div class="device-row ${untouched ? 'untouched' : ''} ${undecided ? 'undecided' : ''}">
         <span class="device-label">
-          <span class="device-dot ${untouched ? 'none' : off ? 'off' : 'on'}"></span>
+          <span class="device-dot ${undecided ? 'pending' : untouched ? 'none' : off ? 'off' : 'on'}"></span>
           ${this.hass.states[entity]?.attributes.friendly_name || entity}
-          ${untouched
-        ? html`<em class="follows">${this._t('device.untouched_hint')}</em>`
-        : nothing}
+          ${note ? html`<em class="follows">${note}</em>` : nothing}
         </span>
 
         <div class="segmented states">
-          <button class="on ${!untouched && !off ? 'active' : ''}" @click=${() =>
+          <button class="on ${!undecided && !untouched && !off ? 'active' : ''}" @click=${() =>
         set({ service: `${domain}.turn_on` })}>${this._t('state.on')}</button>
-          <button class="off ${!untouched && off ? 'active' : ''}" @click=${() =>
+          <button class="off ${!undecided && !untouched && off ? 'active' : ''}" @click=${() =>
         set({ service: `${domain}.turn_off`, service_data: {} })}>${this._t('state.off')}</button>
           <button class="none ${untouched ? 'active' : ''}" title=${this._t('device.untouched_hint')}
             @click=${onClear}>${this._t('device.untouched')}</button>
         </div>
 
-        ${untouched || off ? nothing : this._renderDeviceParameters(domain, current, set)}
+        ${undecided || untouched || off
+        ? nothing
+        : this._renderDeviceParameters(domain, current, set)}
       </div>
     `;
   }
@@ -2647,6 +2651,9 @@ export class DialogSchedulerPlan extends LitElement {
    */
   private _wizardBlocked(step: WizardStep) {
     if (step.kind == 'devices') return !this._wizard.entities.length;
+    // nothing is assumed about candle lighting: until every device has been
+    // given a state there, there is no plan to build
+    if (step.kind == 'opening') return this._openingUndecided().length > 0;
     if (step.kind == 'part') {
       const moment = this._wizard.moments.find(m => m.id == step.moment);
       return !!moment && this._momentProblem(moment) !== null;
@@ -2689,7 +2696,7 @@ export class DialogSchedulerPlan extends LitElement {
       when: preset?.when || 'clock',
       time: preset?.time || '12:00',
       before: preset?.before,
-      on: preset ? preset.on : true,
+      states: {},
     };
     this._wizard = { ...this._wizard, moments: [...this._wizard.moments, moment] };
   }
@@ -2878,55 +2885,95 @@ export class DialogSchedulerPlan extends LitElement {
             ${this._t('wizard.part.what')}${this._helpFor('part_what')}
           </span>
           ${this._helpText('part_what')}
-          <div class="segmented big states">
-            <button class="on ${moment.on ? 'active' : ''}"
-              @click=${() => this._setMomentDefault(moment.id, true)}>
-              ${this._t('wizard.part.all_on')}
-            </button>
-            <button class="off ${moment.on ? '' : 'active'}"
-              @click=${() => this._setMomentDefault(moment.id, false)}>
-              ${this._t('wizard.part.all_off')}
-            </button>
-          </div>
-          ${this._renderWizardDeviceRows(moment.id, moment.on, moment.overrides)}
+          ${this._renderWizardDeviceRows(moment.id)}
         </div>
       </div>
     `;
   }
 
-  /** every chosen device, each free to differ from what the part does */
-  private _renderWizardDeviceRows(
-    id: string,
-    on: boolean,
-    overrides?: Record<string, Action>
-  ) {
-    const act = (entity: string) => ({
-      service: `${entity.split('.')[0]}.turn_${on ? 'on' : 'off'}`,
-      service_data: {},
-    });
+  /**
+   * Every chosen device, with what it does in this part.
+   *
+   * A part records only what it changes: a device nobody touched here carries
+   * on doing whatever the part before it left it doing, which is what a person
+   * means when they say nothing about it. The opening has no part before it,
+   * so there every device has to be decided, and until it is the row says so
+   * rather than quietly picking one.
+   */
+  private _renderWizardDeviceRows(id: string) {
+    const effective = this._statesAt(id);
+    const own = id ? this._wizard.moments.find(m => m.id == id)?.states : this._wizard.opening || {};
+
     return html`
-      <div class="device-rows">
-        ${this._wizard.entities.map(entity =>
-      this._deviceRow(
+      <div class="wizard-states">
+        <div class="bulk">
+          <span class="hint">${this._t('wizard.part.bulk')}</span>
+          <button class="ghost small" @click=${() => this._setAllDevices(id, true)}>
+            ${this._t('wizard.part.all_on')}
+          </button>
+          <button class="ghost small" @click=${() => this._setAllDevices(id, false)}>
+            ${this._t('wizard.part.all_off')}
+          </button>
+        </div>
+        <div class="device-rows">
+          ${this._wizard.entities.map(entity => {
+      const state = effective[entity];
+      const decided = state !== undefined;
+      const inherited = decided && !(own && entity in own);
+      return this._deviceRow(
         entity,
-        overrides?.[entity] || act(entity),
+        state || undefined,
         action => this._setMomentDevice(id, entity, action),
-        () => this._setMomentDevice(id, entity, null)
-      )
-    )}
+        () => this._setMomentDevice(id, entity, null),
+        {
+          undecided: !decided,
+          note: !decided
+            ? this._t('wizard.part.undecided')
+            : inherited
+              ? this._t('wizard.part.carried')
+              : undefined,
+        }
+      );
+    })}
+        </div>
       </div>
     `;
   }
 
   /**
-   * The devices, taken from the book first.
+   * What every device is doing in this part, once the earlier parts are read.
    *
-   * The book is where the household has already said what things are called
-   * and which of them belong together, so that is what is offered: a group in
-   * one click, a device in one click. The raw entity list is still there for
-   * something the book has never heard of, but it is not what anybody should
-   * have to read to set up a Shabbat.
+   * `undefined` means nobody has said yet - only possible at the opening, as
+   * every later part inherits from the one before it.
    */
+  private _statesAt(id: string): Record<string, Action | null | undefined> {
+    const out: Record<string, Action | null | undefined> = {};
+    const opening = this._wizard.opening || {};
+    this._wizard.entities.forEach(entity => {
+      out[entity] = opening[entity];
+    });
+    if (!id) return out;
+    for (const moment of this._wizard.moments) {
+      Object.entries(moment.states || {}).forEach(([entity, action]) => {
+        out[entity] = action;
+      });
+      if (moment.id == id) break;
+    }
+    return out;
+  }
+
+  /** the devices still waiting for an answer at candle lighting */
+  private _openingUndecided() {
+    const opening = this._wizard.opening || {};
+    return this._wizard.entities.filter(entity => opening[entity] === undefined);
+  }
+
+  private _setAllDevices(id: string, on: boolean) {
+    this._wizard.entities.forEach(entity =>
+      this._setMomentDevice(id, entity, plainAction(entity, on))
+    );
+  }
+
   private _renderWizardDevices() {
     const picked = new Set(this._wizard.entities);
     const setEntities = (entities: string[]) => {
@@ -3016,6 +3063,7 @@ export class DialogSchedulerPlan extends LitElement {
    */
   private _renderWizardOpening() {
     const first = this._wizard.moments[0];
+    const waiting = this._openingUndecided();
     return html`
       <div class="wizard-part">
         <p class="part-from">
@@ -3032,18 +3080,13 @@ export class DialogSchedulerPlan extends LitElement {
             ${this._t('wizard.opening.label')}${this._helpFor('opening')}
           </span>
           ${this._helpText('opening')}
-          <div class="segmented big states">
-            <button class="on ${this._wizard.onAtCandleLighting ? 'active' : ''}"
-              @click=${() => this._setMomentDefault('', true)}>
-              ${this._t('wizard.part.all_on')}
-            </button>
-            <button class="off ${this._wizard.onAtCandleLighting ? '' : 'active'}"
-              @click=${() => this._setMomentDefault('', false)}>
-              ${this._t('wizard.part.all_off')}
-            </button>
-          </div>
-          ${this._renderWizardDeviceRows(
-        '', this._wizard.onAtCandleLighting, this._wizard.openingOverrides)}
+          ${this._renderWizardDeviceRows('')}
+          ${waiting.length
+        ? html`<p class="wizard-warning blocking">
+            <span class="mark">✕</span>
+            ${this._t('wizard.opening.waiting', '{n}', String(waiting.length))}
+          </p>`
+        : nothing}
         </div>
       </div>
     `;
@@ -3128,54 +3171,75 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
-  private _setMomentDefault(id: string, on: boolean) {
-    if (!id) {
-      this._wizard = { ...this._wizard, onAtCandleLighting: on };
-      return;
-    }
-    this._updateMoment(id, { on });
-  }
-
+  /**
+   * Record what one device does in one part.
+   *
+   * `null` is a decision too - "this part does not touch it" - and is stored
+   * rather than deleted, so it is never confused with never having been asked.
+   */
   private _setMomentDevice(id: string, entity: string, action: Action | null) {
-    const apply = (overrides?: Record<string, Action>) => {
-      const next = { ...(overrides || {}) };
-      if (action) next[entity] = action;
-      else delete next[entity];
-      return Object.keys(next).length ? next : undefined;
-    };
     if (!id) {
-      this._wizard = { ...this._wizard, openingOverrides: apply(this._wizard.openingOverrides) };
+      this._wizard = {
+        ...this._wizard,
+        opening: { ...(this._wizard.opening || {}), [entity]: action },
+      };
       return;
     }
     const moment = this._wizard.moments.find(m => m.id == id);
-    this._updateMoment(id, { overrides: apply(moment?.overrides) });
+    if (!moment) return;
+    this._updateMoment(id, { states: { ...(moment.states || {}), [entity]: action } });
   }
 
-  /** the day read back as a list, so it can be checked before it is built */
+  /**
+   * The day read back, part by part, with what each device does in it.
+   *
+   * A plan whose whole point is that devices disagree inside one part cannot
+   * be summed up as "on" or "off", so the read-back names them.
+   */
   private _renderWizardReview() {
     const { inside, outside } = this._wizardTimeline();
-    const opening = this._t(this._wizard.onAtCandleLighting ? 'state.on' : 'state.off');
+    const entries = [
+      {
+        at: `${this._plan.startAnchor}+00:00:00`,
+        name: this._t('cube.welcome'),
+        id: '',
+      },
+      ...inside.map(entry => ({
+        at: entry.boundary,
+        name: entry.moment.name || this._t('cube.unnamed'),
+        id: entry.moment.id,
+      })),
+    ];
 
     return html`
       <ol class="review">
+        ${entries.map(entry => {
+      const states = this._statesAt(entry.id);
+      return html`
         <li>
-          <span class="review-at">${this._formatMoment(`${this._plan.startAnchor}+00:00:00`)}</span>
-          <span class="review-name">${this._t('cube.welcome')}</span>
-          <span class="review-state ${this._wizard.onAtCandleLighting ? 'on' : 'off'}">${opening}</span>
-        </li>
-        ${inside.map(
-      entry => html`
-        <li>
-          <span class="review-at">${this._formatMoment(entry.boundary)}</span>
-          <span class="review-name">${entry.moment.name || this._t('cube.unnamed')}</span>
-          <span class="review-state ${entry.moment.on ? 'on' : 'off'}">
-            ${this._t(entry.moment.on ? 'state.on' : 'state.off')}
-          </span>
-        </li>`
-    )}
+          <div class="review-head">
+            <span class="review-at">${this._formatMoment(entry.at)}</span>
+            <span class="review-name">${entry.name}</span>
+          </div>
+          <div class="review-devices">
+            ${this._wizard.entities.map(device => {
+        const state = states[device];
+        const kind = state === undefined ? 'pending' : state === null ? 'none' : isOffAction(state) ? 'off' : 'on';
+        return html`
+            <span class="review-device ${kind}">
+              <span class="device-dot ${kind}"></span>
+              ${this.hass.states[device]?.attributes.friendly_name || device}
+              ${state ? this._parameterSummary(state) : nothing}
+            </span>`;
+      })}
+          </div>
+        </li>`;
+    })}
         <li class="review-end">
-          <span class="review-at">${this._formatMoment(`${this._plan.endAnchor}+00:00:00`)}</span>
-          <span class="review-name">${this._t('anchor.closes')}</span>
+          <div class="review-head">
+            <span class="review-at">${this._formatMoment(`${this._plan.endAnchor}+00:00:00`)}</span>
+            <span class="review-name">${this._t('anchor.closes')}</span>
+          </div>
         </li>
       </ol>
 
@@ -3183,7 +3247,7 @@ export class DialogSchedulerPlan extends LitElement {
         ? html`<p class="wizard-warning">
             <span class="mark">⚠</span>
             ${this._t('wizard.review.outside', '{names}',
-      outside.map(e => e.moment.name || this._t('cube.unnamed')).join(', '))}
+          outside.map(e => e.moment.name || this._t('cube.unnamed')).join(', '))}
           </p>`
         : nothing}
 
@@ -3191,32 +3255,42 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
+  /** "50%", "16°" - what was asked of a device, when anything was */
+  private _parameterSummary(action: Action) {
+    const data = action.service_data || {};
+    const parts: string[] = [];
+    const brightness = data.brightness_pct ?? (
+      data.brightness !== undefined ? Math.round((data.brightness / 255) * 100) : undefined
+    );
+    if (brightness !== undefined) parts.push(`${brightness}%`);
+    if (data.color_temp_kelvin !== undefined) parts.push(`${data.color_temp_kelvin}K`);
+    if (data.temperature !== undefined) parts.push(`${data.temperature}°`);
+    return parts.length ? html`<em class="review-param">${parts.join(' · ')}</em>` : nothing;
+  }
+
   /** turn the answers into a plan and hand it to the editor */
   private _finishWizard() {
     const answers = this._wizard;
-    const act = (on: boolean, entity: string) => plainAction(entity, on);
 
-    // a moment is a boundary; the stretches are what lies between them
+    // a part is a boundary; the stretches are what lies between them
     const boundaries = [
-      {
-        at: `${this._plan.startAnchor}+00:00:00`,
-        on: answers.onAtCandleLighting,
-        name: this._t('cube.welcome'),
-        overrides: answers.openingOverrides,
-      },
+      { at: `${this._plan.startAnchor}+00:00:00`, name: this._t('cube.welcome'), id: '' },
       ...this._wizardTimeline().inside.map(entry => ({
         at: entry.boundary,
-        on: entry.moment.on,
         name: entry.moment.name || this._t('cube.unnamed'),
-        overrides: entry.moment.overrides,
+        id: entry.moment.id,
       })),
     ];
 
     const track = groupTrack(this._t('group.default'));
     const cubes: PlanCube[] = boundaries.map((boundary, i) => {
+      const states = this._statesAt(boundary.id);
       const devices: Record<string, Action> = {};
       answers.entities.forEach(entity => {
-        devices[entity] = boundary.overrides?.[entity] || act(boundary.on, entity);
+        const state = states[entity];
+        // null is "this stretch does not touch it", and undefined never
+        // survives the opening screen; either way there is no action to write
+        if (state) devices[entity] = state;
       });
       return {
         id: `${track}#${i}`,
@@ -3993,6 +4067,41 @@ export class DialogSchedulerPlan extends LitElement {
         color: var(--secondary-text-color);
       }
       .part-when { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .wizard-states { display: flex; flex-direction: column; gap: 10px; }
+      .bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .bulk .hint { margin-inline-end: 4px; }
+      /* a device nobody has answered for yet: nothing is selected, and the row
+         says so rather than looking like a decision that was made */
+      .device-row.undecided {
+        border-color: rgba(var(--plan-detach), 0.75);
+        background: rgba(var(--plan-detach), 0.06);
+      }
+      .device-dot.pending {
+        background: transparent;
+        border: 2px dotted rgb(var(--plan-detach));
+      }
+      .device-row.undecided .follows { color: rgb(var(--plan-detach)); font-style: normal; }
+      .review-head { display: flex; align-items: baseline; gap: 12px; }
+      .review-devices {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+        margin-inline-start: 2px;
+      }
+      .review-device {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        border: 1px solid var(--divider-color);
+        color: var(--primary-text-color);
+      }
+      .review-device.none { border-style: dashed; color: var(--secondary-text-color); }
+      .review-device.pending { border-color: rgb(var(--plan-detach)); }
+      .review-param { font-style: normal; color: var(--secondary-text-color); }
       .wizard-intro { display: flex; flex-direction: column; gap: 8px; }
       .intro-list {
         margin: 0;

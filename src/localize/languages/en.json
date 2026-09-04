@@ -360,7 +360,7 @@
           "report": "The plan read back as what will actually happen, in order, with every device named. The times are worked out from this week’s candle lighting and havdalah, so it is the real thing rather than a sketch. Worth reading before saving; it opens again straight afterwards.",
           "colours": "Plain paints a stretch by what it does: green for on, grey for off, and striped when the devices inside it disagree. Following the action tints it with the colour the bulb will really show, which is prettier and much harder to read at a glance.",
           "times": "The times this household keeps. A new plan starts from these, so they are set once here instead of typed into every wizard. Changing them never touches a plan already built.",
-          "opening": "The plan takes over at candle lighting. What you choose here is what the house does at that moment, and it holds until the first moment you add.",
+          "opening": "Every device is asked separately, because there is no “what happens at candle lighting” that is right for every house. Three answers each: on, off, or “not in this part” - the plan does not touch it during that time and it stays as it is. You cannot move on until every device has an answer, so nothing is decided for you.",
           "hold": "With holding on, a device moved during the plan is put back — a wall switch pressed out of habit, or an automation that does not know it is Shabbat. It waits 30 seconds between attempts, so it can never end up fighting whatever moved it. With holding off, the plan sets each device at the boundary and then leaves it alone.",
           "step_intro": "The wizard builds a whole plan and hands it to the editor. It writes nothing to Home Assistant on the way - only at the end, when you press Save there. You can leave at any point and build by hand instead.",
           "step_devices": "Pick from your book first - those are the names you actually use. The entity picker below is for something the book has never heard of. Only things that can be switched on and off are offered.",
@@ -370,7 +370,7 @@
           "step_parts": "No times and no devices here, on purpose - just the names of the parts. After this step each part gets a screen of its own, where you say how long it lasts and what happens in it. You can add a part of your own and call it whatever you like.",
           "step_part": "One screen, one part. The time you set here is its end - its start was already decided by the part before it, so gaps and overlaps cannot happen.",
           "part_until": "Three ways to say when a part ends: a fixed clock time (23:00 - never moves all year), a distance from sunset (an hour and a half after it), or a distance from havdalah (half an hour before). The last two move through the year together with Shabbat itself, which is usually what you actually meant. A fixed time close to the edge can fall outside Shabbat in another season, and the wizard says so right here.",
-          "part_what": "“All on” or “all off” sets every device at once, and then you change only what differs: the salon air conditioner at 16 degrees, one light at 50% and another at 10%. You can also mark a device as not in this part at all - then the plan does not touch it during this time."
+          "part_what": "A device you do not touch here carries on exactly as it was in the part before, so change only what differs: the salon air conditioner at 16 degrees, one light at 50% and another at 10%. “Not in this part” means the plan leaves it alone during this time - it will not even put it back if somebody switches it off."
         },
         "wizard": {
           "open": "Guided setup",
@@ -430,10 +430,11 @@
           "blocked": "Something above has to change before you can go on.",
           "opening": {
             "title": "What happens when Shabbat comes in?",
-            "body": "This is the first stretch. Choose what happens to everything the moment Shabbat starts, then change any device that should be different.",
-            "label": "At candle lighting",
+            "body": "This is the first stretch. Go through the devices and say what each one does the moment Shabbat starts - there is no default here, because one house wants the salon air conditioner on and the next wants it off.",
+            "label": "What each device does from candle lighting",
             "at": "Candle lighting this week: {time}",
-            "until": "It lasts until “{name}”."
+            "until": "It lasts until “{name}”.",
+            "waiting": "{n} devices have not been answered for yet. Give each one on, off, or “not in this part”."
           },
           "hold": {
             "title": "And if somebody moves a device in the middle?",
@@ -462,15 +463,18 @@
             "empty": "No parts yet. That is fine too - the devices then stay all Shabbat as you set them in the next step."
           },
           "part": {
-            "body": "This part starts exactly where the one before it ended, so two questions are left: how long it lasts, and what each device does while it does.",
+            "body": "This part starts exactly where the one before it ended, so two questions are left: how long it lasts, and what changes about the devices.",
             "untitled": "Unnamed part",
             "starts": "Starts at {time}",
             "until": "How long does this part last?",
             "ends_at": "That is {time} this Shabbat.",
             "ends_unknown": "This time cannot be worked out yet.",
-            "what": "And what are the devices doing meanwhile?",
+            "what": "What are the devices doing in this part?",
             "all_on": "All on",
-            "all_off": "All off"
+            "all_off": "All off",
+            "bulk": "Set them all at once:",
+            "carried": "carries on from the part before",
+            "undecided": "not chosen yet"
           }
         },
         "override": {
@@ -548,9 +552,9 @@
         },
         "device": {
           "all": "All devices",
-          "all_hint": "A shortcut: sets every device of this group in this stretch. Each can still be changed on its own below.",
-          "untouched": "Not in this stretch",
-          "untouched_hint": "This stretch does not act on it: it keeps whatever it had, is not held to anything, is not retried, and any other schedule may drive it."
+          "all_hint": "A shortcut: sets every device of this group in this part. Each can still be changed on its own below.",
+          "untouched": "Not in this part",
+          "untouched_hint": "This part does not act on it: it keeps whatever it had, is not held to anything, is not retried, and any other schedule may drive it."
         },
         "settings": {
           "open": "Settings",
