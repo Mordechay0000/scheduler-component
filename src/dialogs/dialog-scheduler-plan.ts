@@ -2438,7 +2438,7 @@ export class DialogSchedulerPlan extends LitElement {
       { key: 'devices', kind: 'devices' },
       { key: 'parts', kind: 'parts' },
       { key: 'opening', kind: 'opening' },
-      ...this._wizard.moments.map(moment => (<WizardStep>{
+      ...this._orderedMoments().map(moment => (<WizardStep>{
         key: `part:${moment.id}`,
         kind: 'part',
         moment: moment.id,
@@ -2679,6 +2679,27 @@ export class DialogSchedulerPlan extends LitElement {
     return false;
   }
 
+  /**
+   * The parts in the order they actually happen.
+   *
+   * Somebody adds "morning" before they think of "the meal", and the day is
+   * still the day: the screens, the "starts where the last one ended" line and
+   * the carrying-forward of states all follow the clock rather than the order
+   * things were typed. A part whose time cannot be worked out yet sits at the
+   * end, where it does not push anything else about.
+   */
+  private _orderedMoments(): WizardMoment[] {
+    return [...this._wizard.moments]
+      .map((moment, index) => ({ moment, index, at: this._moment(this._momentBoundary(moment)) }))
+      .sort((a, b) => {
+        if (a.at && b.at) return a.at.getTime() - b.at.getTime() || a.index - b.index;
+        if (a.at) return -1;
+        if (b.at) return 1;
+        return a.index - b.index;
+      })
+      .map(entry => entry.moment);
+  }
+
   /** the moments in the order they actually happen, and the ones that cannot */
   private _wizardTimeline() {
     const start = this._bandStart;
@@ -2814,7 +2835,7 @@ export class DialogSchedulerPlan extends LitElement {
         ${this._wizard.moments.length
         ? html`
         <ol class="part-list">
-          ${this._wizard.moments.map((moment, i) => html`
+          ${this._orderedMoments().map((moment, i) => html`
           <li class="part-row">
             <span class="part-index">${i + 1}</span>
             <input
@@ -2859,8 +2880,9 @@ export class DialogSchedulerPlan extends LitElement {
    * about that.
    */
   private _renderWizardPart(moment: WizardMoment) {
-    const index = this._wizard.moments.findIndex(m => m.id == moment.id);
-    const previous = index > 0 ? this._wizard.moments[index - 1] : null;
+    const ordered = this._orderedMoments();
+    const index = ordered.findIndex(m => m.id == moment.id);
+    const previous = index > 0 ? ordered[index - 1] : null;
     const from = previous
       ? this._formatMoment(this._momentBoundary(previous))
       : this._formatMoment(`${this._plan.startAnchor}+00:00:00`);
@@ -2970,7 +2992,7 @@ export class DialogSchedulerPlan extends LitElement {
       out[entity] = opening[entity];
     });
     if (!id) return out;
-    for (const moment of this._wizard.moments) {
+    for (const moment of this._orderedMoments()) {
       Object.entries(moment.states || {}).forEach(([entity, action]) => {
         out[entity] = action;
       });

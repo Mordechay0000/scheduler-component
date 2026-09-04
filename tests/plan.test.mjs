@@ -1102,6 +1102,38 @@ export default async function run() {
       'and the next part carries the untouched device forward rather than dropping it');
   }, JERUSALEM);
 
+  // --- the day runs on the clock, not on the order things were typed -------
+
+  await withPage(page(), async p => {
+    const ordered = await p.evaluate(async () => {
+      const dialog = window.__dialog;
+      dialog._wizard = {
+        entities: ['light.salon'],
+        opening: { 'light.salon': { service: 'light.turn_on', service_data: {} } },
+        moments: [
+          // typed the wrong way round: morning first, then the night before it
+          { id: 'morning', name: 'בוקר', when: 'clock', time: '07:00', states: {} },
+          { id: 'night', name: 'שינה', when: 'clock', time: '23:00',
+            states: { 'light.salon': { service: 'light.turn_off', service_data: {} } } },
+        ],
+      };
+      dialog._wizardStep = dialog._wizardSteps.findIndex(x => x.kind === 'parts');
+      await dialog.updateComplete;
+      const listed = [...dialog.shadowRoot.querySelectorAll('.part-row .moment-name')].map(e => e.value);
+      const steps = dialog._wizardSteps.filter(x => x.kind === 'part').map(x => x.moment);
+      const morning = dialog._statesAt('morning')['light.salon'].service;
+      dialog._finishWizard();
+      await dialog.updateComplete;
+      return { listed, steps, morning, cubes: dialog._plan.groups[0].cubes.map(c => c.name) };
+    });
+
+    s.ok(ordered.listed.join() === 'שינה,בוקר', 'the parts are listed in the order the day runs');
+    s.ok(ordered.steps.join() === 'night,morning', 'and asked about in that order too');
+    s.ok(ordered.morning.endsWith('turn_off'),
+      'so a part inherits from the one that really precedes it, not the one typed before it');
+    s.ok(ordered.cubes.join() === 'קבלת שבת,שינה,בוקר', 'and the plan comes out in day order');
+  }, JERUSALEM);
+
   // --- one screen, one question --------------------------------------------
   //
   // A wizard that puts every part's time on one screen and every part's
