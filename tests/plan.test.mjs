@@ -800,6 +800,10 @@ export default async function run() {
   await withPage(page(), async p => {
     const shown = await p.evaluate(async () => {
       const dialog = window.__dialog;
+      const goTo = (kind, id) => {
+        const steps = dialog._wizardSteps;
+        dialog._wizardStep = steps.findIndex(x => x.kind === kind && (id === undefined || x.moment === id));
+      };
       dialog._wizard = {
         entities: ['light.salon'],
         onAtCandleLighting: true,
@@ -809,7 +813,7 @@ export default async function run() {
           { id: 'b', name: 'מוקדם מדי', when: 'clock', time: '17:00', on: true },
         ],
       };
-      dialog._wizardStep = 6;
+      goTo('review');
       await dialog.updateComplete;
       const root = dialog.shadowRoot;
       return {
@@ -880,24 +884,68 @@ export default async function run() {
       'and the next moment is the other way round, as the generator needs');
   }, JERUSALEM);
 
+  // --- one screen, one question --------------------------------------------
+  //
+  // A wizard that puts every part's time on one screen and every part's
+  // devices on another is a form in a wizard's hat. Each part of the day gets
+  // a screen to itself: when it ends, and what the devices do in it.
+
   await withPage(page(), async p => {
-    const rows = await p.evaluate(async () => {
+    const screens = await p.evaluate(async () => {
       const dialog = window.__dialog;
+      const goTo = (kind, id) => {
+        const steps = dialog._wizardSteps;
+        dialog._wizardStep = steps.findIndex(x => x.kind === kind && (id === undefined || x.moment === id));
+      };
       dialog._wizard = {
         entities: ['climate.salon', 'light.salon'],
         onAtCandleLighting: true,
-        moments: [{ id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', on: true }],
+        moments: [
+          { id: 'meal', name: 'סעודה', when: 'clock', time: '20:00', on: true },
+          { id: 'night', name: 'שינה', when: 'clock', time: '23:00', on: false },
+        ],
       };
-      dialog._wizardStep = 4;
       await dialog.updateComplete;
-      return {
-        moments: dialog.shadowRoot.querySelectorAll('.wizard-moment').length,
-        devices: dialog.shadowRoot.querySelectorAll('.wizard-moment .device-row').length,
+      const read = () => ({
+        title: dialog.shadowRoot.querySelector('.wizard-title')?.textContent.trim(),
+        devices: dialog.shadowRoot.querySelectorAll('.device-row').length,
+        whens: dialog.shadowRoot.querySelectorAll('.part-when select').length,
+      });
+
+      const kinds = dialog._wizardSteps.map(x => x.kind);
+      goTo('intro');
+      await dialog.updateComplete;
+      const intro = dialog.shadowRoot.querySelectorAll('.intro-list li').length;
+      goTo('parts');
+      await dialog.updateComplete;
+      const parts = {
+        rows: dialog.shadowRoot.querySelectorAll('.part-row').length,
+        devices: dialog.shadowRoot.querySelectorAll('.device-row').length,
+        whens: dialog.shadowRoot.querySelectorAll('.part-when select').length,
       };
+      goTo('opening');
+      await dialog.updateComplete;
+      const opening = read();
+      goTo('part', 'meal');
+      await dialog.updateComplete;
+      const meal = read();
+      goTo('part', 'night');
+      await dialog.updateComplete;
+      const night = read();
+      return { kinds, intro, parts, opening, meal, night };
     });
 
-    s.ok(rows.moments === 2, 'the opening and every moment are laid out');
-    s.ok(rows.devices === 4, 'each with a row per device');
+    s.ok(screens.kinds.join() === 'intro,devices,parts,opening,part,part,hold,review',
+      'every part of the day is a step of its own');
+    s.ok(screens.intro === 4, 'and the first screen says what the next ones will ask');
+    s.ok(screens.parts.rows === 2 && !screens.parts.devices && !screens.parts.whens,
+      'the step that picks the parts asks nothing else - no times, no devices');
+    s.ok(screens.opening.devices === 2 && !screens.opening.whens,
+      'the opening asks only what the devices do, since it starts at candle lighting');
+    s.ok(screens.meal.whens === 1 && screens.meal.devices === 2,
+      'and a part asks two things: when it ends, and what each device does');
+    s.ok(screens.meal.title.includes('סעודה') && screens.night.title.includes('שינה'),
+      'each part screen is titled with the part it is about');
   }, JERUSALEM);
 
   await withPage(page({ schedule: null }), async p => {
@@ -919,11 +967,15 @@ export default async function run() {
     const written = await p.evaluate(async () => {
       const dialog = window.__dialog;
       const at = (when, time, before) => dialog._momentBoundary({ when, time, before });
-      dialog._wizardStep = 3;
+      const goTo = (kind, id) => {
+        const steps = dialog._wizardSteps;
+        dialog._wizardStep = steps.findIndex(x => x.kind === kind && (id === undefined || x.moment === id));
+      };
       dialog._addMoment();
+      goTo('part', dialog._wizard.moments[0].id);
       await dialog.updateComplete;
       return {
-        options: [...dialog.shadowRoot.querySelectorAll('.moment select option')].map(o => o.value),
+        options: [...dialog.shadowRoot.querySelectorAll('.part-when select option')].map(o => o.value),
         evening: at('clock', '22:30'),
         morning: at('clock', '06:30'),
         afterSunset: at('sunset', '01:30', false),
@@ -1069,24 +1121,31 @@ export default async function run() {
   }, JERUSALEM);
 
   // --- checked while it is being built, not after --------------------------
+  //
+  // And checked on the screen where it was typed: the part that cannot work is
+  // the only thing in front of you, so there is nothing to hunt for.
 
   await withPage(page(), async p => {
     const checked = await p.evaluate(async () => {
       const dialog = window.__dialog;
+      const goTo = (kind, id) => {
+        const steps = dialog._wizardSteps;
+        dialog._wizardStep = steps.findIndex(x => x.kind === kind && (id === undefined || x.moment === id));
+      };
+      const step = () => dialog._wizardSteps[dialog._wizardStep];
       const read = () => ({
-        blocking: dialog._wizardProblems().blocking.length,
-        blocked: dialog._wizardBlocked('moments'),
+        blocked: dialog._wizardBlocked(step()),
         next: dialog.shadowRoot.querySelector('.wizard-buttons .primary')?.disabled,
         shown: dialog.shadowRoot.querySelectorAll('.wizard-warning.blocking').length,
       });
 
-      dialog._wizardStep = 3;
       dialog._wizard = {
         entities: ['light.salon'],
         onAtCandleLighting: true,
         // 17:00 on the opening day is before candle lighting: outside the band
         moments: [{ id: 'a', name: 'מוקדם מדי', when: 'clock', time: '17:00', on: true }],
       };
+      goTo('part', 'a');
       await dialog.updateComplete;
       const outside = read();
 
@@ -1095,27 +1154,36 @@ export default async function run() {
       const fixed = read();
 
       dialog._addMoment();
-      dialog._updateMoment(dialog._wizard.moments[1].id, { name: 'שוב', when: 'clock', time: '22:30' });
+      const second = dialog._wizard.moments[1].id;
+      dialog._updateMoment(second, { name: 'שוב', when: 'clock', time: '22:30' });
+      goTo('part', second);
       await dialog.updateComplete;
       const collided = read();
 
-      return { outside, fixed, collided };
+      goTo('review');
+      await dialog.updateComplete;
+      const review = { blocked: dialog._wizardBlocked(step()) };
+
+      return { outside, fixed, collided, review };
     });
 
-    s.ok(checked.outside.blocking === 1 && checked.outside.blocked,
-      'a moment that falls outside Shabbat is caught as it is typed');
+    s.ok(checked.outside.blocked, 'a part that falls outside Shabbat is caught as it is typed');
     s.ok(checked.outside.next === true, 'and the wizard will not move on until it changes');
-    s.ok(checked.outside.shown === 1, 'saying so on the screen rather than only in the button');
+    s.ok(checked.outside.shown === 1,
+      'saying so on the screen it was typed on, rather than only in the button');
     s.ok(!checked.fixed.blocked && checked.fixed.next === false,
       'moving it inside the band clears the way again');
-    s.ok(checked.collided.blocking === 1 && checked.collided.blocked,
-      'and two moments on the same minute are blocked too');
+    s.ok(checked.collided.blocked, 'and two parts ending on the same minute are blocked too');
+    s.ok(checked.review.blocked, 'and the last screen will not build a day that cannot run');
   }, JERUSALEM);
 
   await withPage(page(), async p => {
     const said = await p.evaluate(async () => {
       const dialog = window.__dialog;
-      dialog._wizardStep = 3;
+      const goTo = (kind, id) => {
+        const steps = dialog._wizardSteps;
+        dialog._wizardStep = steps.findIndex(x => x.kind === kind && (id === undefined || x.moment === id));
+      };
       dialog._wizard = {
         entities: ['light.salon'],
         onAtCandleLighting: true,
@@ -1124,23 +1192,28 @@ export default async function run() {
           { id: 'b', name: 'מוצאי', when: 'end', time: '00:30', before: true, on: true },
         ],
       };
+      goTo('part', 'a');
       await dialog.updateComplete;
-      const problems = dialog._wizardProblems();
-      return {
-        blocking: problems.blocking.length,
-        warnings: problems.warnings,
-        marks: dialog.shadowRoot.querySelectorAll('.moment-caution').length,
+      const hard = {
+        blocked: dialog._wizardBlocked(dialog._wizardSteps[dialog._wizardStep]),
+        caution: dialog.shadowRoot.querySelector('.wizard-warning')?.textContent.trim() || '',
       };
+      goTo('part', 'b');
+      await dialog.updateComplete;
+      const moving = dialog.shadowRoot.querySelectorAll('.wizard-warning').length;
+
+      const problems = dialog._wizardProblems();
+      return { hard, moving, warnings: problems.warnings, blocking: problems.blocking.length };
     });
 
     s.ok(said.blocking === 0, 'a workable day is not blocked for using a clock time');
-    s.ok(said.warnings.length === 1 && said.warnings[0].includes('שינה'),
-      'but the one hard time is named');
-    s.ok(!said.warnings[0].includes('מוצאי'),
-      'and the one measured from havdalah is not, because it moves with the year');
-    s.ok(said.warnings[0].includes('לא תפעל') || said.warnings[0].includes('לא יפעל'),
-      'the warning says what will actually happen on a Shabbat where it lands outside');
-    s.ok(said.marks === 1, 'and the moment itself is marked where it is typed');
+    s.ok(!said.hard.blocked, 'nor is the part itself');
+    s.ok(said.hard.caution.length > 20,
+      'but the screen where it was typed says what a fixed time costs');
+    s.ok(said.moving === 0,
+      'while a part measured from havdalah is left in peace, because it moves with the year');
+    s.ok(said.warnings.some(w => w.includes('שינה') && !w.includes('מוצאי')),
+      'and the read-back at the end names the hard one, and only it');
   }, JERUSALEM);
 
   // --- devices come from the book, not from a list of entity ids -----------
@@ -1255,17 +1328,30 @@ export default async function run() {
 
       dialog._helpKey = null;
       dialog._settingsOpen = false;
-      dialog._wizardStep = 3;
+      dialog._wizardStep = dialog._wizardSteps.findIndex(x => x.kind === 'parts');
       await dialog.updateComplete;
       const wizard = dialog.shadowRoot.querySelectorAll('.wizard .help-toggle').length;
-      await open('step_moments');
+      await open('step_parts');
 
-      return { seen, inspector, settings, wizard };
+      dialog._helpKey = null;
+      dialog._wizard = {
+        ...dialog._wizard,
+        entities: ['light.salon'],
+        moments: [{ id: 'a', name: 'סעודה', when: 'clock', time: '22:30', on: true }],
+      };
+      dialog._wizardStep = dialog._wizardSteps.findIndex(x => x.kind === 'part');
+      await dialog.updateComplete;
+      const part = dialog.shadowRoot.querySelectorAll('.wizard .help-toggle').length;
+      await open('part_until');
+      await open('part_what');
+
+      return { seen, inspector, settings, wizard, part };
     });
 
     s.ok(answered.inspector >= 2, 'the stretch and its devices each carry their own "?"');
     s.ok(answered.settings >= 3, 'so does every preference');
     s.ok(answered.wizard >= 1, 'and every step of the wizard');
+    s.ok(answered.part >= 2, 'a part of the day explains both of the things it asks');
     s.ok(Object.values(answered.seen).every(length => length > 60),
       'and each one answers in plain words rather than a label');
   }, JERUSALEM);

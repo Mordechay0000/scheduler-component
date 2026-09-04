@@ -144,13 +144,15 @@ using them opens on a festival that starts on a Thursday and closes at the end o
 a three-day run. The `upcoming_shabbat_*` pair is Shabbat-only and misses every
 festival; the plan warns if it finds them.
 
-**Not sure where to start?** The editor offers a guided path in plain language:
-pick the devices, say what happens when Shabbat comes in, then build the day out
-of named moments — Friday night dinner, bedtime, morning, lunch, a nap, or
-anything else you add — each saying what happens from then until the next. It
-reads the whole day back before building anything. It is an alternative way in,
-never a replacement: everything it produces is editable afterwards, and the
-editor is there from the first screen.
+**Not sure where to start?** The editor offers a guided path in plain language,
+one question per screen: which devices to look after, what parts your Shabbat
+has — Friday night dinner, bedtime, morning, lunch, a nap, or anything else you
+name — and then each part on a screen of its own, asking only how long it lasts
+and what each device does in it. A part is checked on the screen it was typed
+on, so what is wrong is the only thing in front of you. It reads the whole day
+back before building anything. It is an alternative way in, never a
+replacement: everything it produces is editable afterwards, and the editor is
+there from the first screen.
 
 ### Driving it from a model
 
@@ -238,7 +240,7 @@ If you want to make a donation as appreciation of the work on this project, you 
 * **בהירות וגוון** – לתאורה אפשר לקבוע אחוז בהירות וטמפרטורת צבע (מחמים ועד אור יום), לקובייה שלמה או למכשיר בודד בתוכה. הקובייה נצבעת בצבע שהנורה תראה בפועל.
 * **שמירה על המצב (ניסיוני)** – אם מפסק בקיר או אינטגרציה אחרת משנים מכשיר במהלך הקובייה, המנוע מחזיר אותו למצב שהוגדר. ממתין 30 שניות בין ניסיונות כדי לא להיכנס להתגוששות, ופועל רק על מה שהוא באמת יכול להשוות.
 * **העוגנים מכסים גם חג** – `upcoming_candle_lighting` ו-`upcoming_havdalah` בנויים על ״שבת **או יום טוב** הקרובים״, ולכן הפס נפתח גם בחג שנופל ביום חמישי ונסגר בסוף רצף של שלושה ימים. הזוג `upcoming_shabbat_*` הוא לשבת בלבד ומפספס כל חג — התוכנית מזהירה אם הוא בשימוש.
-* **אשף מודרך** – בוחרים מכשירים, קובעים מה קורה בכניסת שבת, ואז בונים את היום מזמנים עם שמות: סעודת ליל שבת, שינה, בוקר, סעודת שבת, שנת צהריים — או כל זמן אחר שמוסיפים. כל זמן קובע מה קורה ממנו ועד הבא אחריו, ובסוף האשף מקריא את היום כולו לבדיקה לפני שהוא בונה משהו. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
+* **אשף מודרך** – שאלה אחת בכל מסך: אילו מכשירים, מאילו קטעים מורכבת השבת (סעודת ליל שבת, שינה, בוקר, סעודת שבת, שנת צהריים — או כל קטע אחר שמוסיפים ונותנים לו שם), ואז כל קטע מקבל מסך משלו ונשאל בו רק שתי שאלות: עד מתי הוא נמשך, ומה עושה בו כל מכשיר. הבדיקה נעשית במסך שבו הקלדת, ולכן מה שלא תקין הוא הדבר היחיד שמולך. בסוף האשף מקריא את היום כולו לבדיקה לפני שהוא בונה משהו. האשף הוא דרך כניסה נוספת ולא תחליף: כל מה שהוא בונה ניתן לעריכה אחר כך, והעורך זמין מהמסך הראשון.
 * **תמיכה במודלי שפה** – הכלים מצטרפים לכלים ש-Home Assistant כבר מגיש, ולכן אין שרת נפרד להריץ ואין כתובת שנייה להוסיף: כל לקוח MCP או צינור קולי שכבר מחובר לבית מקבל אותם לצד `HassTurnOn` ושאר הכלים, בלי שום הגדרה. במקביל הם רשומים גם כ-LLM API נפרד בשם ״Shabbat plans״, למי שרוצה רק אותם — לבחירה בהגדרות סוכן שיחה או בכתובת `/api/mcp/scheduler_shabbat`. ההנחיה שנוספת לכל שיחה מכוונת להיות קטנה — פסקה אחת עם צורת התוכנית וצורות הזמן — וכל השאר (הכללים, דוגמה מלאה, הטעויות) יושב מאחורי `scheduler_how_to_write_a_plan` וכל שגיאה מפנה אליו, כדי שגם מודלים קטנים שרצים בבית יוכלו לעבוד עם זה. הכלים מדברים באוצר המילים של התוכנית — קבוצות, קוביות וחריגים — כך שמודל לא צריך לדעת דבר על מסלולים ועדיפויות, והזמנים נכתבים כמו שמדברים: `havdalah@06:30`.
 
 **עורך התזמון (Time scheme) המשופר:**

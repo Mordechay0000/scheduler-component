@@ -102,6 +102,13 @@ type BoundaryParts = {
   before: boolean;
 };
 
+/** one screen of the wizard: a question, or one part of the day */
+interface WizardStep {
+  key: string;
+  kind: 'intro' | 'devices' | 'parts' | 'opening' | 'part' | 'hold' | 'review';
+  moment?: string;
+}
+
 /**
  * A moment in the wizard's day.
  *
@@ -2395,8 +2402,34 @@ export class DialogSchedulerPlan extends LitElement {
   // A way in for somebody who does not want to think about anchors at all. It
   // never replaces the editor: it builds a plan and hands it straight over.
 
-  private get _wizardSteps() {
-    return ['intro', 'devices', 'opening', 'moments', 'settings', 'hold', 'review'];
+  /**
+   * One question per screen, and one screen per part of the day.
+   *
+   * The whole point of a wizard is that it decides what to think about next.
+   * Two long screens - every part's time on one, every part's devices on the
+   * other - is a form, and a form is what somebody who only wants their air
+   * conditioners sorted came here to avoid. So: what to control, which parts
+   * the day has, and then that part, and that part, and that part.
+   */
+  private get _wizardSteps(): WizardStep[] {
+    return [
+      { key: 'intro', kind: 'intro' },
+      { key: 'devices', kind: 'devices' },
+      { key: 'parts', kind: 'parts' },
+      { key: 'opening', kind: 'opening' },
+      ...this._wizard.moments.map(moment => (<WizardStep>{
+        key: `part:${moment.id}`,
+        kind: 'part',
+        moment: moment.id,
+      })),
+      { key: 'hold', kind: 'hold' },
+      { key: 'review', kind: 'review' },
+    ];
+  }
+
+  private get _wizardStepAt(): WizardStep {
+    const steps = this._wizardSteps;
+    return steps[Math.min(this._wizardStep ?? 0, steps.length - 1)];
   }
 
   /**
@@ -2495,6 +2528,41 @@ export class DialogSchedulerPlan extends LitElement {
    * and it is worth knowing at the moment the time is being typed rather than
    * six months later.
    */
+  /**
+   * What is wrong with this one part, if anything, in a sentence.
+   *
+   * Only what genuinely cannot be built: a time that is not a time, one that
+   * falls outside the band, or one landing on the same minute as another part
+   * and so leaving nothing in between. Everything else is a caution, and a
+   * caution never stops anybody.
+   */
+  private _momentProblem(moment: WizardMoment): string | null {
+    const named = (m: WizardMoment) => m.name || this._t('cube.unnamed');
+    if (!/^\d{1,2}:\d{2}$/.test(moment.time || '')) {
+      return this._t('wizard.problem.no_time', '{name}', named(moment));
+    }
+    const at = this._moment(this._momentBoundary(moment));
+    if (!at) return null;  // the anchor has not published yet; the time is fine
+    const start = this._bandStart;
+    const end = this._bandEnd;
+    if (start && end && (at <= start || at >= end) && moment.when != 'sunset') {
+      return this._t(
+        'wizard.problem.outside',
+        ['{name}', '{time}'],
+        [named(moment), this._formatMoment(this._momentBoundary(moment))]
+      );
+    }
+    const clash = this._wizard.moments.find(other => {
+      if (other.id == moment.id) return false;
+      const otherAt = this._moment(this._momentBoundary(other));
+      return !!otherAt && Math.abs(otherAt.getTime() - at.getTime()) < 60000;
+    });
+    if (clash) {
+      return this._t('wizard.problem.collide', '{names}', [named(moment), named(clash)].join(' · '));
+    }
+    return null;
+  }
+
   private _wizardProblems(): { blocking: string[]; warnings: string[] } {
     const blocking: string[] = [];
     const warnings: string[] = [];
@@ -2570,10 +2638,20 @@ export class DialogSchedulerPlan extends LitElement {
     return { blocking, warnings };
   }
 
-  /** whether this step is allowed to hand over to the next one */
-  private _wizardBlocked(step: string) {
-    if (step == 'devices') return !this._wizard.entities.length;
-    if (step == 'moments') return this._wizardProblems().blocking.length > 0;
+  /**
+   * Whether this screen is allowed to hand over to the next one.
+   *
+   * A part is checked on its own screen, where the thing that is wrong is the
+   * only thing in front of you - not on a list of six where it has to be
+   * hunted for.
+   */
+  private _wizardBlocked(step: WizardStep) {
+    if (step.kind == 'devices') return !this._wizard.entities.length;
+    if (step.kind == 'part') {
+      const moment = this._wizard.moments.find(m => m.id == step.moment);
+      return !!moment && this._momentProblem(moment) !== null;
+    }
+    if (step.kind == 'review') return this._wizardProblems().blocking.length > 0;
     return false;
   }
 
@@ -2624,50 +2702,218 @@ export class DialogSchedulerPlan extends LitElement {
   }
 
   private _renderWizard() {
-    const step = this._wizardSteps[this._wizardStep!];
-    const last = this._wizardStep == this._wizardSteps.length - 1;
+    const steps = this._wizardSteps;
+    const index = Math.min(this._wizardStep ?? 0, steps.length - 1);
+    const step = steps[index];
+    const last = index == steps.length - 1;
     const blocked = this._wizardBlocked(step);
+    const moment = step.moment
+      ? this._wizard.moments.find(m => m.id == step.moment)
+      : undefined;
 
     return html`
       <div class="wizard">
         <div class="wizard-progress">
-          ${this._wizardSteps.map((_s, i) => html`<span class="dot ${i <= this._wizardStep! ? 'done' : ''}"></span>`)}
+          ${steps.map((_s, i) => html`<span class="dot ${i <= index ? 'done' : ''}"></span>`)}
         </div>
 
         <h2 class="wizard-title">
-          ${this._t(`wizard.${step}.title`)}
+          ${step.kind == 'part'
+        ? (moment?.name || this._t('wizard.part.untitled'))
+        : this._t(`wizard.${step.kind}.title`)}
           <span class="wizard-count">
             ${this._t('wizard.step_of', ['{n}', '{total}'],
-      [String(this._wizardStep! + 1), String(this._wizardSteps.length)])}
+          [String(index + 1), String(steps.length)])}
           </span>
-          ${this._helpFor(`step_${step}`)}
+          ${this._helpFor(`step_${step.kind}`)}
         </h2>
-        <p class="wizard-body">${this._t(`wizard.${step}.body`)}</p>
-        ${this._helpText(`step_${step}`)}
+        <p class="wizard-body">${this._t(`wizard.${step.kind}.body`)}</p>
+        ${this._helpText(`step_${step.kind}`)}
 
-        ${step == 'devices' ? this._renderWizardDevices() : nothing}
-        ${step == 'opening' ? this._renderWizardOpening() : nothing}
-        ${step == 'moments' ? this._renderWizardMoments() : nothing}
-        ${step == 'settings' ? this._renderWizardSettings() : nothing}
-        ${step == 'hold' ? this._renderWizardHold() : nothing}
-        ${step == 'review' ? this._renderWizardReview() : nothing}
+        ${step.kind == 'intro' ? this._renderWizardIntro() : nothing}
+        ${step.kind == 'devices' ? this._renderWizardDevices() : nothing}
+        ${step.kind == 'parts' ? this._renderWizardParts() : nothing}
+        ${step.kind == 'opening' ? this._renderWizardOpening() : nothing}
+        ${step.kind == 'part' && moment ? this._renderWizardPart(moment) : nothing}
+        ${step.kind == 'hold' ? this._renderWizardHold() : nothing}
+        ${step.kind == 'review' ? this._renderWizardReview() : nothing}
 
         <div class="wizard-buttons">
           <button class="ghost" @click=${() => {
-        if (this._wizardStep! > 0) this._wizardStep = this._wizardStep! - 1;
+        if (index > 0) this._wizardStep = index - 1;
         else this._wizardStep = null;
       }}>
-            ${this._wizardStep! > 0 ? this._t('wizard.back') : hassLocalize('ui.common.cancel', this.hass)}
+            ${index > 0 ? this._t('wizard.back') : hassLocalize('ui.common.cancel', this.hass)}
           </button>
           <button
             class="ghost primary"
             ?disabled=${blocked}
             title=${blocked ? this._t('wizard.blocked') : ''}
-            @click=${() => (last ? this._finishWizard() : (this._wizardStep = this._wizardStep! + 1))}
+            @click=${() => (last ? this._finishWizard() : (this._wizardStep = index + 1))}
           >
             ${last ? this._t('wizard.finish') : this._t('wizard.next')}
           </button>
         </div>
+      </div>
+    `;
+  }
+
+  /** what the next few screens are going to ask, so nobody is walking blind */
+  private _renderWizardIntro() {
+    return html`
+      <div class="wizard-intro">
+        <span class="field-label">${this._t('wizard.intro.list_title')}</span>
+        <ol class="intro-list">
+          ${['list_devices', 'list_parts', 'list_each', 'list_end'].map(
+      key => html`<li>${this._t(`wizard.intro.${key}`)}</li>`
+    )}
+        </ol>
+      </div>
+    `;
+  }
+
+  /**
+   * Which parts the day has - and nothing else on this screen.
+   *
+   * Only the list: no times, no devices, no states. Somebody is picking the
+   * shape of their Shabbat here - the meal, the night, the morning - and each
+   * part they pick becomes a screen of its own straight after.
+   */
+  private _renderWizardParts() {
+    const used = new Set(this._wizard.moments.map(m => m.name));
+    const suggestions = this._prefs.moments.filter(
+      preset => !used.has(this._t(`wizard.preset.${preset.key}`))
+    );
+
+    return html`
+      <div class="wizard-parts">
+        ${this._wizard.moments.length
+        ? html`
+        <ol class="part-list">
+          ${this._wizard.moments.map((moment, i) => html`
+          <li class="part-row">
+            <span class="part-index">${i + 1}</span>
+            <input
+              class="moment-name"
+              .value=${moment.name}
+              placeholder=${this._t('wizard.moments.name')}
+              @input=${(ev: Event) =>
+            this._updateMoment(moment.id, { name: (ev.target as HTMLInputElement).value })}
+            />
+            <button class="icon-only" title=${hassLocalize('ui.common.delete', this.hass)}
+              @click=${() => this._removeMoment(moment.id)}>
+              <ha-svg-icon .path=${mdiClose}></ha-svg-icon>
+            </button>
+          </li>`)}
+        </ol>`
+        : html`<p class="wizard-empty">${this._t('wizard.parts.empty')}</p>`}
+
+        ${suggestions.length ? html`
+        <div class="field">
+          <span class="field-label">${this._t('wizard.parts.suggestions')}</span>
+          <div class="moment-presets">
+            ${suggestions.map(preset => html`
+            <button class="chip" @click=${() => this._addMoment(preset)}>
+              <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${this._t(`wizard.preset.${preset.key}`)}
+            </button>`)}
+          </div>
+        </div>` : nothing}
+
+        <button class="ghost" @click=${() => this._addMoment()}>
+          <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${this._t('wizard.moments.add')}
+        </button>
+        <span class="hint">${this._t('wizard.parts.hint')}</span>
+      </div>
+    `;
+  }
+
+  /**
+   * One part of the day: when it ends, and what each device does in it.
+   *
+   * Two questions, in the order a person asks them, about one part only. The
+   * part before it decides when this one starts, so there is nothing to ask
+   * about that.
+   */
+  private _renderWizardPart(moment: WizardMoment) {
+    const index = this._wizard.moments.findIndex(m => m.id == moment.id);
+    const previous = index > 0 ? this._wizard.moments[index - 1] : null;
+    const from = previous
+      ? this._formatMoment(this._momentBoundary(previous))
+      : this._formatMoment(`${this._plan.startAnchor}+00:00:00`);
+    const at = this._moment(this._momentBoundary(moment));
+    const caution = this._momentCaution(moment);
+    const outside = !!(at && this._bandStart && this._bandEnd
+      && (at <= this._bandStart || at >= this._bandEnd)
+      && moment.when != 'sunset');
+
+    return html`
+      <div class="wizard-part">
+        <p class="part-from">
+          ${this._t('wizard.part.starts', '{time}',
+      previous ? `${previous.name || this._t('cube.unnamed')} · ${from}` : from)}
+        </p>
+
+        <div class="field">
+          <span class="field-label">
+            ${this._t('wizard.part.until')}${this._helpFor('part_until')}
+          </span>
+          ${this._helpText('part_until')}
+          <div class="part-when">
+            ${this._endPicker(moment, changes => this._updateMoment(moment.id, changes))}
+          </div>
+          <span class="field-resolved ${outside ? 'wrong' : ''}">
+            ${at
+        ? this._t('wizard.part.ends_at', '{time}', this._formatMoment(this._momentBoundary(moment)))
+        : this._t('wizard.part.ends_unknown')}
+          </span>
+          ${caution && at
+        ? html`<p class="wizard-warning ${outside ? 'blocking' : ''}">
+              <span class="mark">${outside ? '✕' : '⚠'}</span>${caution}
+            </p>`
+        : nothing}
+        </div>
+
+        <div class="field">
+          <span class="field-label">
+            ${this._t('wizard.part.what')}${this._helpFor('part_what')}
+          </span>
+          ${this._helpText('part_what')}
+          <div class="segmented big states">
+            <button class="on ${moment.on ? 'active' : ''}"
+              @click=${() => this._setMomentDefault(moment.id, true)}>
+              ${this._t('wizard.part.all_on')}
+            </button>
+            <button class="off ${moment.on ? '' : 'active'}"
+              @click=${() => this._setMomentDefault(moment.id, false)}>
+              ${this._t('wizard.part.all_off')}
+            </button>
+          </div>
+          ${this._renderWizardDeviceRows(moment.id, moment.on, moment.overrides)}
+        </div>
+      </div>
+    `;
+  }
+
+  /** every chosen device, each free to differ from what the part does */
+  private _renderWizardDeviceRows(
+    id: string,
+    on: boolean,
+    overrides?: Record<string, Action>
+  ) {
+    const act = (entity: string) => ({
+      service: `${entity.split('.')[0]}.turn_${on ? 'on' : 'off'}`,
+      service_data: {},
+    });
+    return html`
+      <div class="device-rows">
+        ${this._wizard.entities.map(entity =>
+      this._deviceRow(
+        entity,
+        overrides?.[entity] || act(entity),
+        action => this._setMomentDevice(id, entity, action),
+        () => this._setMomentDevice(id, entity, null)
+      )
+    )}
       </div>
     `;
   }
@@ -2761,28 +3007,44 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
-  /** what the house is doing the moment the plan takes over */
+  /**
+   * What the house is doing the moment the plan takes over.
+   *
+   * The first stretch, asked as a question rather than presented as a row of
+   * settings: everything on or everything off, and then whichever devices
+   * should differ.
+   */
   private _renderWizardOpening() {
+    const first = this._wizard.moments[0];
     return html`
-      <div class="field">
-        <span class="field-label">
-          ${this._t('wizard.opening.label')}${this._helpFor('opening')}
-        </span>
-        ${this._helpText('opening')}
-        <div class="segmented big states">
-          <button class="on ${this._wizard.onAtCandleLighting ? 'active' : ''}"
-            @click=${() => { this._wizard = { ...this._wizard, onAtCandleLighting: true }; }}>
-            ${this._t('state.on')}
-          </button>
-          <button class="off ${this._wizard.onAtCandleLighting ? '' : 'active'}"
-            @click=${() => { this._wizard = { ...this._wizard, onAtCandleLighting: false }; }}>
-            ${this._t('state.off')}
-          </button>
-        </div>
-        <span class="field-resolved">
+      <div class="wizard-part">
+        <p class="part-from">
           ${this._t('wizard.opening.at', '{time}',
       this._formatMoment(`${this._plan.startAnchor}+00:00:00`))}
-        </span>
+        </p>
+        ${first ? html`
+        <p class="part-from">
+          ${this._t('wizard.opening.until', '{name}', first.name || this._t('cube.unnamed'))}
+        </p>` : nothing}
+
+        <div class="field">
+          <span class="field-label">
+            ${this._t('wizard.opening.label')}${this._helpFor('opening')}
+          </span>
+          ${this._helpText('opening')}
+          <div class="segmented big states">
+            <button class="on ${this._wizard.onAtCandleLighting ? 'active' : ''}"
+              @click=${() => this._setMomentDefault('', true)}>
+              ${this._t('wizard.part.all_on')}
+            </button>
+            <button class="off ${this._wizard.onAtCandleLighting ? '' : 'active'}"
+              @click=${() => this._setMomentDefault('', false)}>
+              ${this._t('wizard.part.all_off')}
+            </button>
+          </div>
+          ${this._renderWizardDeviceRows(
+        '', this._wizard.onAtCandleLighting, this._wizard.openingOverrides)}
+        </div>
       </div>
     `;
   }
@@ -2812,37 +3074,6 @@ export class DialogSchedulerPlan extends LitElement {
     `;
   }
 
-  private _renderWizardMoments() {
-    const used = new Set(this._wizard.moments.map(m => m.name));
-    const suggestions = this._prefs.moments.filter(
-      preset => !used.has(this._t(`wizard.preset.${preset.key}`))
-    );
-
-    return html`
-      <div class="moment-presets">
-        ${suggestions.map(
-      preset => html`
-          <button class="chip" @click=${() => this._addMoment(preset)}>
-            <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${this._t(`wizard.preset.${preset.key}`)}
-          </button>`
-    )}
-      </div>
-
-      ${this._wizard.moments.length
-        ? html`
-      <div class="moments">
-        ${this._wizard.moments.map(moment => this._renderWizardMoment(moment))}
-      </div>`
-        : html`<p class="wizard-empty">${this._t('wizard.moments.empty')}</p>`}
-
-      <button class="ghost" @click=${() => this._addMoment()}>
-        <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>${this._t('wizard.moments.add')}
-      </button>
-
-      ${this._renderWizardProblems()}
-    `;
-  }
-
   /** what is wrong, and what is merely worth knowing, as it is being typed */
   private _renderWizardProblems() {
     const { blocking, warnings } = this._wizardProblems();
@@ -2865,8 +3096,8 @@ export class DialogSchedulerPlan extends LitElement {
   /**
    * Where a moment ends, offered the way people say it.
    *
-   * Shared with the settings, where the same three choices set the household's
-   * own default for each moment, so both places behave identically.
+   * Shared with the preferences, where the same three choices set the
+   * household's own default for each part, so both places behave identically.
    */
   private _endPicker(value: EndTime, onChange: (changes: Partial<EndTime>) => void) {
     return html`
@@ -2894,110 +3125,6 @@ export class DialogSchedulerPlan extends LitElement {
         .value=${value.time}
         @change=${(ev: Event) => onChange({ time: (ev.target as HTMLInputElement).value })}
       />
-    `;
-  }
-
-  private _renderWizardMoment(moment: WizardMoment) {
-    const at = this._moment(this._momentBoundary(moment));
-    const caution = this._momentCaution(moment);
-    const outside = !!(at && this._bandStart && this._bandEnd
-      && (at <= this._bandStart || at >= this._bandEnd)
-      && moment.when != 'sunset');
-
-    return html`
-      <div class="moment ${outside ? 'wrong' : ''}">
-        <input
-          class="moment-name"
-          .value=${moment.name}
-          placeholder=${this._t('wizard.moments.name')}
-          @input=${(ev: Event) => this._updateMoment(moment.id, { name: (ev.target as HTMLInputElement).value })}
-        />
-        ${this._endPicker(moment, changes => this._updateMoment(moment.id, changes))}
-        <div class="segmented states">
-          <button class="on ${moment.on ? 'active' : ''}"
-            @click=${() => this._updateMoment(moment.id, { on: true })}>
-            ${this._t('state.on')}
-          </button>
-          <button class="off ${moment.on ? '' : 'active'}"
-            @click=${() => this._updateMoment(moment.id, { on: false })}>
-            ${this._t('state.off')}
-          </button>
-        </div>
-        <span class="moment-at">${at ? this._formatMoment(this._momentBoundary(moment)) : '—'}</span>
-        ${caution
-        ? html`<span class="moment-caution ${outside ? 'wrong' : ''}" title=${caution}>
-            ${outside ? '✕' : '⚠'}
-          </span>`
-        : nothing}
-        <button class="icon-only" title=${hassLocalize('ui.common.delete', this.hass)}
-          @click=${() => this._removeMoment(moment.id)}>
-          <ha-svg-icon .path=${mdiClose}></ha-svg-icon>
-        </button>
-      </div>
-    `;
-  }
-
-  /**
-   * Moment by moment, what each device does.
-   *
-   * This is where a plan stops being "everything on" and becomes usable: the
-   * salon air conditioner during the meal, the bedrooms afterwards, one light
-   * bright and another dim. A device left alone simply does whatever the
-   * moment does.
-   */
-  private _renderWizardSettings() {
-    const moments = this._wizardTimeline().inside;
-    const domainOf = (entity: string) => entity.split('.')[0];
-    const act = (on: boolean, entity: string) => ({
-      service: `${domainOf(entity)}.turn_${on ? 'on' : 'off'}`,
-      service_data: {},
-    });
-
-    const opening = {
-      id: '',
-      name: this._t('cube.welcome'),
-      on: this._wizard.onAtCandleLighting,
-      overrides: this._wizard.openingOverrides,
-      at: `${this._plan.startAnchor}+00:00:00`,
-    };
-    const entries = [
-      opening,
-      ...moments.map(entry => ({
-        id: entry.moment.id,
-        name: entry.moment.name || this._t('cube.unnamed'),
-        on: entry.moment.on,
-        overrides: entry.moment.overrides,
-        at: entry.boundary,
-      })),
-    ];
-
-    return html`
-      <div class="wizard-settings">
-        ${entries.map(entry => html`
-        <div class="wizard-moment">
-          <div class="wizard-moment-head">
-            <span class="review-name">${entry.name}</span>
-            <span class="review-at">${this._formatMoment(entry.at)}</span>
-            <div class="segmented states">
-              <button class="on ${entry.on ? 'active' : ''}"
-                @click=${() => this._setMomentDefault(entry.id, true)}>${this._t('state.on')}</button>
-              <button class="off ${entry.on ? '' : 'active'}"
-                @click=${() => this._setMomentDefault(entry.id, false)}>${this._t('state.off')}</button>
-            </div>
-          </div>
-          <div class="device-rows">
-            ${this._wizard.entities.map(entity => {
-      const own = entry.overrides?.[entity];
-      return this._deviceRow(
-        entity,
-        own || act(entry.on, entity),
-        action => this._setMomentDevice(entry.id, entity, action),
-        () => this._setMomentDevice(entry.id, entity, null)
-      );
-    })}
-          </div>
-        </div>`)}
-      </div>
     `;
   }
 
@@ -3850,29 +3977,63 @@ export class DialogSchedulerPlan extends LitElement {
         max-width: 640px;
         margin-inline: auto;
       }
-      .wizard-settings {
+      .wizard-part, .wizard-parts {
         align-self: stretch;
         display: flex;
         flex-direction: column;
-        gap: 14px;
-        max-height: 46vh;
+        gap: 16px;
+        max-height: 52vh;
         overflow-y: auto;
       }
-      .wizard-moment {
-        border: 1px solid var(--divider-color);
-        border-radius: 10px;
-        padding: 10px 12px;
+      .wizard-part .device-rows { max-height: none; }
+      .wizard-parts > button.ghost, .wizard-parts > .field { align-self: flex-start; }
+      .part-from {
+        margin: 0;
+        font-size: 13px;
+        color: var(--secondary-text-color);
+      }
+      .part-when { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .wizard-intro { display: flex; flex-direction: column; gap: 8px; }
+      .intro-list {
+        margin: 0;
+        padding-inline-start: 20px;
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 6px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--primary-text-color);
       }
-      .wizard-moment-head {
+      .part-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .part-row {
         display: flex;
         align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
+        gap: 10px;
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--divider-color);
       }
-      .wizard-moment-head .review-name { flex: 1; }
+      .part-row .moment-name { flex: 1; }
+      .part-index {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--secondary-text-color);
+        background: rgba(var(--rgb-secondary-text-color, 114, 114, 114), 0.12);
+      }
+      .field-resolved.wrong { color: rgb(var(--plan-off)); }
       .wizard-progress { display: flex; gap: 6px; }
       .dot {
         width: 28px;
@@ -3903,6 +4064,9 @@ export class DialogSchedulerPlan extends LitElement {
         flex-direction: column;
         gap: 14px;
       }
+      /* a button says what it does; stretched across the dialog it reads as a
+         banner instead */
+      .wizard-devices > button.ghost { align-self: flex-start; }
       .wizard-body {
         font-size: 15px;
         line-height: 1.6;

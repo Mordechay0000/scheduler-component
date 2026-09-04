@@ -362,13 +362,15 @@
           "times": "The times this household keeps. A new plan starts from these, so they are set once here instead of typed into every wizard. Changing them never touches a plan already built.",
           "opening": "The plan takes over at candle lighting. What you choose here is what the house does at that moment, and it holds until the first moment you add.",
           "hold": "With holding on, a device moved during the plan is put back — a wall switch pressed out of habit, or an automation that does not know it is Shabbat. It waits 30 seconds between attempts, so it can never end up fighting whatever moved it. With holding off, the plan sets each device at the boundary and then leaves it alone.",
-          "step_intro": "Nothing is saved while you are in here. At the end you get an ordinary plan in the editor, and you still have to press Save.",
-          "step_devices": "Pick from the book first — those are your own names for your own things. Reach for the entity picker only when the book has never heard of something.",
-          "step_opening": "One choice for everything, to keep this simple. Devices start differing from each other two steps from here.",
-          "step_moments": "Each moment says only when it ends; the next begins exactly there, so a gap or an overlap is impossible. Three ways to say when: a clock reading, a distance from sunset, or a distance from havdalah. The last two move with the year, a clock reading does not, and that is what the notes below are about.",
-          "step_settings": "This is where a plan stops being \"everything on\". Set the moment as a whole above, then change only the devices that should differ — including any that this moment should not touch at all.",
-          "step_hold": "One choice for the whole plan. Any single stretch can still be changed on its own in the editor afterwards.",
-          "step_review": "Read it top to bottom. Everything here can be edited afterwards, and nothing is saved until you press Save in the editor."
+          "step_intro": "The wizard builds a whole plan and hands it to the editor. It writes nothing to Home Assistant on the way - only at the end, when you press Save there. You can leave at any point and build by hand instead.",
+          "step_devices": "Pick from your book first - those are the names you actually use. The entity picker below is for something the book has never heard of. Only things that can be switched on and off are offered.",
+          "step_opening": "The first stretch starts exactly at candle lighting, so there is nothing to say about when. You only say what state the plan starts from.",
+          "step_hold": "One choice for the whole plan. Any single part can still be changed on its own in the editor afterwards.",
+          "step_review": "Read it top to bottom. Everything here can be edited afterwards, and nothing is saved until you press Save in the editor.",
+          "step_parts": "No times and no devices here, on purpose - just the names of the parts. After this step each part gets a screen of its own, where you say how long it lasts and what happens in it. You can add a part of your own and call it whatever you like.",
+          "step_part": "One screen, one part. The time you set here is its end - its start was already decided by the part before it, so gaps and overlaps cannot happen.",
+          "part_until": "Three ways to say when a part ends: a fixed clock time (23:00 - never moves all year), a distance from sunset (an hour and a half after it), or a distance from havdalah (half an hour before). The last two move through the year together with Shabbat itself, which is usually what you actually meant. A fixed time close to the edge can fall outside Shabbat in another season, and the wizard says so right here.",
+          "part_what": "“All on” or “all off” sets every device at once, and then you change only what differs: the salon air conditioner at 16 degrees, one light at 50% and another at 10%. You can also mark a device as not in this part at all - then the plan does not touch it during this time."
         },
         "wizard": {
           "open": "Guided setup",
@@ -382,11 +384,16 @@
           "no": "No",
           "intro": {
             "title": "Let's set up your Shabbat",
-            "body": "You'll answer a few questions and get a working plan. Nothing is saved until you press Save at the end, and everything can be changed afterwards in the editor."
+            "body": "A few plain questions, and at the end you will have a plan that switches your air conditioners and lights by itself, every week. You can go back at any point, and nothing is saved until the end.",
+            "list_devices": "Pick the devices the plan should look after.",
+            "list_parts": "Break Shabbat into parts - the meal, the night, the morning.",
+            "list_each": "Go through each part on its own: how long it lasts, and what every device does in it.",
+            "list_end": "Look at the whole thing before anything is built.",
+            "list_title": "What we are about to do"
           },
           "devices": {
-            "title": "Which devices?",
-            "body": "Pick the lights and switches that should follow this plan, straight from your device book. You can add more later, and any one of them can be given hours of its own afterwards.",
+            "title": "Which devices should the plan control?",
+            "body": "Tick the air conditioners and lights you want it to look after. Anything you leave out is not touched at all.",
             "groups": "Groups from your book",
             "book": "Devices from your book",
             "no_book": "Your book is empty. Open Settings → Device book to name what you have, or pick an entity by hand below.",
@@ -397,11 +404,8 @@
             "none": "Nothing chosen yet — pick at least one to go on."
           },
           "moments": {
-            "title": "Build your Shabbat",
-            "body": "Add the moments your day is made of — dinner, bedtime, morning, lunch, a nap. You only say when each one ends; the next one begins exactly there, so there is no way to leave a gap or an overlap. What the devices do is the step after this.",
             "add": "Add a moment",
-            "name": "Name it",
-            "empty": "No moments yet - the devices will simply hold their opening state until Shabbat goes out."
+            "name": "Name it"
           },
           "when": {
             "clock": "at a clock time",
@@ -419,24 +423,21 @@
           },
           "review": {
             "title": "This is your Shabbat",
-            "body": "Read it through. Anything here can still be changed in the editor afterwards.",
-            "outside": "{names} falls outside the band and was left out. Shabbat evening times must be after candle lighting, and Shabbat day times before havdalah."
-          },
-          "settings": {
-            "title": "What each device does",
-            "body": "Moment by moment. Set the moment as a whole with the on/off above it, then change any device that should differ — the salon air conditioner during the meal while the bedrooms stay off, one light bright and another dim."
+            "body": "Read it top to bottom. If something looks wrong, go back and fix it. At the end the plan opens in the editor, and it is only saved when you press Save there.",
+            "outside": "{names} falls outside the band and was left out. A Friday-night time has to be after candle lighting, and a Saturday one before havdalah."
           },
           "step_of": "Step {n} of {total}",
           "blocked": "Something above has to change before you can go on.",
           "opening": {
-            "title": "What happens at candle lighting?",
-            "body": "The plan takes over the moment Shabbat comes in, and holds until the first moment you add in the next step. Choose what the house does then; individual devices can be set differently two steps from here.",
+            "title": "What happens when Shabbat comes in?",
+            "body": "This is the first stretch. Choose what happens to everything the moment Shabbat starts, then change any device that should be different.",
             "label": "At candle lighting",
-            "at": "That is {time} this week."
+            "at": "Candle lighting this week: {time}",
+            "until": "It lasts until “{name}”."
           },
           "hold": {
-            "title": "Should the plan hold its state?",
-            "body": "A Shabbat plan usually should. If a wall switch is pressed out of habit, or another automation moves a device without knowing it is Shabbat, holding puts it back rather than leaving it wrong until the morning."
+            "title": "And if somebody moves a device in the middle?",
+            "body": "If a wall switch gets pressed out of habit, or another automation moves something without knowing it is Shabbat, holding the state puts it back where the plan wanted it instead of leaving it wrong until morning. For a Shabbat plan you usually want this on."
           },
           "caution": {
             "outside": "This lands at {time}, outside Shabbat — the stretch would never run.",
@@ -452,6 +453,24 @@
             "hard": "{names} use a fixed clock time. It works this Shabbat, but candle lighting and havdalah move by more than an hour across the year, so on another Shabbat the same reading can fall outside the band. Nothing breaks when that happens: the stretch simply does not run, and the one before it carries on, with the same devices in the same state, until the next boundary that does land. Measuring from sunset or from havdalah avoids it entirely.",
             "tight": "\"{name}\" is only {hours} hours from the edge of the band. It works tonight, but it is the first one that will fall outside on a Shabbat that comes in later.",
             "unknown": "\"{name}\" cannot be placed yet - whatever publishes its time has not said anything. The boundary itself is fine; it will be worked out when the plan runs."
+          },
+          "parts": {
+            "title": "What parts does your Shabbat have?",
+            "body": "Think of Shabbat as a few stretches, one after another: the meal, the night, the morning. Devices can be in a different state in each - the salon air conditioner on during the meal and off at night. Here you only pick the parts and what to call them; we will go through them one at a time next.",
+            "suggestions": "The usual ones - tap to add",
+            "hint": "The order here is the order of the day. Each part starts exactly where the one before it ends, so a gap in the middle is impossible.",
+            "empty": "No parts yet. That is fine too - the devices then stay all Shabbat as you set them in the next step."
+          },
+          "part": {
+            "body": "This part starts exactly where the one before it ended, so two questions are left: how long it lasts, and what each device does while it does.",
+            "untitled": "Unnamed part",
+            "starts": "Starts at {time}",
+            "until": "How long does this part last?",
+            "ends_at": "That is {time} this Shabbat.",
+            "ends_unknown": "This time cannot be worked out yet.",
+            "what": "And what are the devices doing meanwhile?",
+            "all_on": "All on",
+            "all_off": "All off"
           }
         },
         "override": {
