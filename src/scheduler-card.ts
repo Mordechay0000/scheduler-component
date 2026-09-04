@@ -25,6 +25,7 @@ import "./dialogs/dialog-scheduler-editor";
 import "./dialogs/dialog-scheduler-plan";
 import "./components/scheduler-item-row";
 import "./components/scheduler-overview-row";
+import "./components/scheduler-plan-row";
 import "./components/scheduler-overview-ruler";
 import "./components/scheduler-overview-add-row";
 import "./components/scheduler-overview-daybar";
@@ -439,6 +440,21 @@ export class SchedulerCard extends LitElement {
   }
 
   private _renderRow(scheduleItem: ScheduleStorageEntry) {
+    // a plan is a whole band cut into parts, not one action at one time, so
+    // the row that describes it is its own - in either view
+    if (isPlan(scheduleItem)) {
+      return html`
+        <scheduler-plan-row
+          .hass=${this.hass}
+          .config=${this._config}
+          .schedule_id=${scheduleItem.schedule_id}
+          .schedule=${scheduleItem}
+          @editClick=${(ev: Event) => { this._handleEditClick(ev, scheduleItem) }}
+        >
+        </scheduler-plan-row>
+      `;
+    }
+
     return this.overviewMode
       ? html`
         <scheduler-overview-row

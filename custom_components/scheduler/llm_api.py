@@ -26,6 +26,7 @@ from . import const
 from .device_book import (
     KINDS,
     async_devices_to_schedule,
+    async_is_a_device_to_schedule,
     async_get_book,
     async_name_device,
     async_remove_group,
@@ -413,6 +414,32 @@ def _resolve_plan_devices(hass: HomeAssistant, plan: dict[str, Any]) -> dict[str
                 ]
             cubes.append(cube)
         group["cubes"] = cubes
+
+    # the card offers only devices that can be switched, and a plan that names
+    # anything else does not fail loudly - it fails on one device, quietly, on
+    # Shabbat. So the same rule is checked here, where a plan can arrive from
+    # anywhere
+    named: list[str] = []
+    for group in out["groups"]:
+        named.extend(group.get("devices") or [])
+        for cube in group.get("cubes") or []:
+            named.extend(
+                device["device"] for device in (cube.get("devices") or []) if device.get("device")
+            )
+    for exception in out["exceptions"]:
+        if exception.get("device"):
+            named.append(exception["device"])
+
+    wrong = [
+        entity_id
+        for entity_id in dict.fromkeys(named)
+        if "." in entity_id and not async_is_a_device_to_schedule(hass, entity_id)
+    ]
+    if wrong:
+        raise PlanError(
+            f"{', '.join(wrong)} cannot be switched on and off, so a plan has nothing to "
+            f"tell them. Call {const.DOMAIN}_list_devices for the ones that can."
+        )
     return out
 
 

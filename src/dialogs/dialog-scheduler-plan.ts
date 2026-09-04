@@ -29,6 +29,7 @@ import { isOffAction, invertOnOffAction } from "../data/format/is_off_action";
 import { computeActionColor } from "../data/format/compute_action_color";
 import { computeEntity } from "../lib/entity";
 import { resolveBoundary } from "../data/plan/resolve_boundary";
+import { validatePlan } from "../data/plan/validate_plan";
 import { PlanReport, describePlan } from "../data/plan/describe_plan";
 import {
   DeviceBook,
@@ -1046,13 +1047,29 @@ export class DialogSchedulerPlan extends LitElement {
   // --- saving --------------------------------------------------------------
 
   private async _save() {
-    const emptyGroup = this._plan.groups.find(g => !g.entities.length);
-    if (emptyGroup) {
-      this._error = this._t('error.no_entities', '{group}', emptyGroup.name);
-      return;
-    }
     if (!this._bandStart || !this._bandEnd) {
       this._error = this._t('error.no_anchor');
+      return;
+    }
+
+    // the editor prevents all of this while you work; a plan can still arrive
+    // from a model, an older version or a hand-edited file, so it is checked
+    // again here rather than trusted
+    const problems = validatePlan(this._plan, this.hass);
+    if (problems.length) {
+      this._error = [
+        this._t('check.refused'),
+        ...problems.slice(0, 4).map(problem =>
+          this._t(
+            problem.key,
+            Object.keys(problem.values || {}).map(key => `{${key}}`),
+            Object.values(problem.values || {})
+          )
+        ),
+        ...(problems.length > 4
+          ? [this._t('check.and_more', '{n}', String(problems.length - 4))]
+          : []),
+      ].join(' ');
       return;
     }
 

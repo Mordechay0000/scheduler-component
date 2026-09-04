@@ -906,6 +906,133 @@ export default async function run() {
       'and the next moment is the other way round, as the generator needs');
   }, JERUSALEM);
 
+  // --- a plan in the list looks like a plan --------------------------------
+  //
+  // An ordinary row reads "turn on the salon light at 19:29", which is true of
+  // a plan and answers nothing about it. What somebody wants from the list is
+  // "is tonight set up, and what is it going to do".
+
+  await withPage(buildPage({
+    body: `<div id="host" style="width:520px"></div>`,
+    script: `
+      await customElements.whenDefined('scheduler-plan-row');
+      Object.assign(window.__hass.states, {
+        'light.salon': { entity_id: 'light.salon', state: 'on', attributes: { friendly_name: 'תאורת סלון' } },
+        'climate.salon': { entity_id: 'climate.salon', state: 'off', attributes: { friendly_name: 'מזגן סלון' } },
+        'switch.schedule_plan1': { entity_id: 'switch.schedule_plan1', state: 'on', attributes: {} },
+        '${CANDLE}': { entity_id: '${CANDLE}', state: '2026-08-14T19:29:00+03:00', attributes: {} },
+        '${HAVDALAH}': { entity_id: '${HAVDALAH}', state: '2026-08-15T20:12:00+03:00', attributes: {} },
+      });
+      const slot = (name, start, stop, actions) => ({
+        start, stop, name, track: 'group:הבית', priority: 0, actions,
+        conditions: { type: 'or', items: [], track_changes: false },
+      });
+      const row = document.createElement('scheduler-plan-row');
+      row.hass = window.__hass;
+      row.config = {};
+      row.schedule_id = 'plan1';
+      row.schedule = {
+        schedule_id: 'plan1', entity_id: 'switch.schedule_plan1', enabled: true,
+        name: 'תוכנית שבת', tags: ['shabbat-plan'], repeat_type: 'repeat',
+        next_entries: [0], timestamps: [],
+        entries: [{ weekdays: ['daily'], slots: [
+          slot('קבלת שבת', '${CANDLE}+00:00:00', '${CANDLE}@23:00:00',
+            [{ service: 'light.turn_on', service_data: {}, target: { entity_id: ['light.salon'] } },
+             { service: 'climate.turn_on', service_data: { temperature: 16 }, target: { entity_id: ['climate.salon'] } }]),
+          slot('שינה', '${CANDLE}@23:00:00', '${HAVDALAH}+01:30:00',
+            [{ service: 'light.turn_off', service_data: {}, target: { entity_id: ['light.salon'] } }]),
+        ] }],
+      };
+      document.getElementById('host').appendChild(row);
+      await row.updateComplete;
+      window.__done = true;
+    `,
+  }), async p => {
+    const shown = await p.evaluate(() => {
+      const root = document.querySelector('scheduler-plan-row').shadowRoot;
+      return {
+        parts: [...root.querySelectorAll('.part')].map(e => e.textContent.replace(/\s+/g, ' ').trim()),
+        band: root.querySelector('.band').textContent.trim(),
+        foot: root.querySelector('.foot').textContent.replace(/\s+/g, ' ').trim(),
+        toggle: !!root.querySelector('ha-switch'),
+      };
+    });
+
+    s.ok(shown.parts.length === 2 && shown.parts[0].includes('קבלת שבת'),
+      'the row lists the parts of the day, in order, with the time each starts');
+    s.ok(shown.band.includes('19:29') && shown.band.includes('20:12'),
+      'and the band it covers, from candle lighting to havdalah');
+    s.ok(shown.foot.includes('2') && shown.foot.includes('מכשירים'),
+      'and how much of the house it covers');
+    s.ok(shown.toggle, 'while still being a row you can switch off like any other');
+  }, JERUSALEM);
+
+  // --- what the screen prevents, the save checks again ---------------------
+  //
+  // Every one of these is impossible to build in the editor. A plan can still
+  // arrive from a model, from an older version, or from a hand-edited file,
+  // and a broken one does not fail loudly - it fails on one device, quietly,
+  // in the middle of Shabbat.
+
+  await withPage(page(), async p => {
+    const refused = await p.evaluate(async CANDLE => {
+      const dialog = window.__dialog;
+      const group = dialog._plan.groups[0];
+      dialog._setMembers(group, ['light.salon']);
+      await dialog.updateComplete;
+
+      const trySave = async change => {
+        dialog._error = '';
+        window.__apiCalls = [];
+        const before = JSON.parse(JSON.stringify(dialog._plan));
+        change(dialog._plan);
+        await dialog._save();
+        const out = { error: dialog._error, calls: window.__apiCalls.length };
+        dialog._plan = before;
+        await dialog.updateComplete;
+        return out;
+      };
+
+      const clean = await trySave(() => { });
+      const sensor = await trySave(plan => {
+        // a real entity, and one nothing can be told to do
+        plan.groups[0].entities = [...plan.groups[0].entities, CANDLE];
+      });
+      const stranger = await trySave(plan => {
+        plan.groups[0].cubes[0].devices = {
+          ...plan.groups[0].cubes[0].devices,
+          'switch.boiler': { service: 'switch.turn_on', service_data: {} },
+        };
+      });
+      const gap = await trySave(plan => {
+        plan.groups[0].cubes[0].stop = 'sensor.jewish_calendar_upcoming_havdalah-05:00:00';
+      });
+      const parameter = await trySave(plan => {
+        plan.groups[0].cubes[0].devices = {
+          'light.salon': { service: 'light.turn_on', service_data: { brightness_pct: 400 } },
+        };
+      });
+      const gone = await trySave(plan => {
+        plan.groups[0].entities = ['light.nowhere'];
+        plan.groups[0].cubes.forEach(cube => { cube.devices = {}; });
+      });
+      return { clean, sensor, stranger, gap, parameter, gone };
+    }, CANDLE);
+
+    s.ok(!refused.clean.error && refused.clean.calls === 1,
+      'a plan built in the editor saves without complaint');
+    s.ok(refused.sensor.error.includes('להדליק') && refused.sensor.calls === 0,
+      'a reading that cannot be switched is refused, however it got in');
+    s.ok(refused.stranger.error && refused.stranger.calls === 0,
+      'so is a stretch acting on a device that is not in its group');
+    s.ok(refused.gap.error.includes('חור') && refused.gap.calls === 0,
+      'so is a gap between two parts, which would leave that time unset');
+    s.ok(refused.parameter.error.includes('400') && refused.parameter.calls === 0,
+      'so is a brightness that is not a brightness');
+    s.ok(refused.gone.error && refused.gone.calls === 0,
+      'and so is a device that no longer exists');
+  }, JERUSALEM);
+
   // --- nothing is assumed about what a device should be doing --------------
   //
   // There is no "the plan starts on". One house wants the salon air
@@ -1670,8 +1797,10 @@ export default async function run() {
 
     const call = await p.evaluate(async () => {
       await window.__dialog._save();
+      if (window.__dialog._error) return { error: window.__dialog._error };
       return (window.__apiCalls || []).slice(-1)[0];
     });
+    s.ok(!call.error, 'a saved plan is not refused on reopening: ' + (call.error || ''));
     s.ok(call.endpoint === 'scheduler/edit', 'saving an existing plan updates it rather than adding another');
     s.ok(call.data.timeslots.length === 2, 'a round trip through the editor loses nothing');
     s.ok(call.data.timeslots[1].track === 'detach:switch.plata',

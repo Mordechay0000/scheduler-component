@@ -567,6 +567,26 @@
           "times": "Default times",
           "times_hint": "What the wizard offers when you add one of these moments. Plans you have already built keep the times they were built with.",
           "times_reset": "Back to the suggested times"
+        },
+        "check": {
+          "refused": "The plan was not saved:",
+          "and_more": "And {n} more.",
+          "empty_group": "The group “{group}” has no devices in it.",
+          "unknown_device": "“{device}” no longer exists in Home Assistant.",
+          "not_a_device": "“{device}” cannot be switched on and off, so a schedule has nothing to tell it.",
+          "two_groups": "“{device}” is in both “{a}” and “{b}”. A device belongs to one group.",
+          "stranger": "The part “{where}” sets “{device}”, which is not in the group “{group}”.",
+          "no_action": "The part “{where}” has no usable action for “{device}”.",
+          "parameter": "In “{where}”, {value} for “{device}” is outside the allowed range ({low}–{high}).",
+          "gap": "There is a gap between “{where}” and “{next}”. Each part has to start exactly where the one before it ended.",
+          "backwards": "“{where}” ends before it starts."
+        },
+        "row": {
+          "paused": "paused",
+          "band": "From {from} to {to}",
+          "summary": "{parts} parts · {devices} devices",
+          "now": "Now: {name}",
+          "next": "Next: {name} · {time}"
         }
       }
     }

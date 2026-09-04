@@ -703,6 +703,24 @@ def test_a_plan_can_name_a_group_instead_of_entity_ids(hass, with_book):
     assert [a["entity_id"] for a in slots[0][const.ATTR_ACTIONS]] == ["switch.plata"]
 
 
+def test_a_plan_naming_something_that_cannot_be_switched_is_refused(hass, with_book):
+    """The card offers only devices that can be switched; so does this.
+
+    A plan that names a temperature reading does not fail loudly - it fails on
+    one device, quietly, on Shabbat.
+    """
+    result = call(SavePlanTool, hass, plan={
+        "name": "x",
+        "groups": [{"name": "g", "devices": ["light.salon", "sensor.temperature"], "cubes": [
+            {"from": "candle_lighting", "to": "havdalah",
+             "devices": [{"device": "light.salon", "state": "on"}]}]}],
+    })
+
+    assert result["ok"] is False
+    assert "sensor.temperature" in result["error"]
+    assert "list_devices" in result["error"]
+
+
 def test_a_stretch_can_name_its_devices_the_way_the_household_does(hass, with_book):
     """The names reach inside the stretch too, where the states actually live.
 
