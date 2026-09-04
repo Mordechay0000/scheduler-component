@@ -1,4 +1,4 @@
-"""Shabbat plans, as an LLM API Home Assistant serves itself.
+"""Scheduling the household's devices for Shabbat, as an LLM API.
 
 Registering an API here is worth more than shipping a separate MCP server: it
 is served over Home Assistant's own MCP Server integration at
@@ -50,7 +50,7 @@ from .plan_times import ANCHOR_NAMES, DEFAULT_ANCHORS, TimeError, parse_time
 _LOGGER = logging.getLogger(__name__)
 
 API_ID = f"{const.DOMAIN}_shabbat"
-API_NAME = "Shabbat plans"
+API_NAME = "Shabbat device schedules"
 
 #: What every conversation carries, whether it is about Shabbat or about a lamp.
 #:
@@ -62,10 +62,12 @@ API_NAME = "Shabbat plans"
 #: rest is kept. The rest is one call away, and the tools point at it whenever
 #: something does not add up.
 API_PROMPT = """
-SHABBAT PLANS
-A plan covers one Shabbat or festival: a band from candle lighting to havdalah,
-cut into named stretches, with a row of them per group of devices. Both ends are
-read from the Jewish calendar every week, so a plan is written once.
+SCHEDULING DEVICES FOR SHABBAT
+These tools schedule the household's own devices - lights, air conditioners,
+switches - across one Shabbat or festival. A plan is that schedule: a band from
+candle lighting to havdalah, cut into named stretches, with a row of them per
+group of devices. Both ends are read from the Jewish calendar every week, so it
+is written once.
 
 Times: candle_lighting, havdalah, havdalah-30m, candle_lighting+1h,
 candle_lighting@22:30 (22:30 on the day it came in), havdalah@06:30 (06:30 on
@@ -85,10 +87,11 @@ scheduler_preview_plan and read the report back before scheduler_save_plan.
 #: The whole of it, handed over by a tool rather than by the prompt.
 PLAN_GUIDE = """
 WHAT A PLAN IS
-A plan is one band of time, from candle lighting to havdalah, cut into named
-stretches. It is not a weekly repeat: both ends are read from the Jewish
-calendar every week, so the plan follows the season by itself and covers a
-festival - including one running two or three days - with no extra work.
+A plan schedules the household's devices across one Shabbat: one band of time,
+from candle lighting to havdalah, cut into named stretches. It is not a weekly
+repeat - both ends are read from the Jewish calendar every week, so the plan
+follows the season by itself and covers a festival, including one running two or
+three days, with no extra work.
 
   groups     - devices that move together. Each group has its own row of
                stretches; a boundary in one group never moves another's.
@@ -482,7 +485,7 @@ class _SchedulerTool(llm.Tool):
         except vol.Invalid as err:
             return _fail(f"The scheduler refused that: {err} {_GUIDE_HINT}")
         except Exception:  # noqa: BLE001 - a tool that raises is a tool that stops a conversation
-            _LOGGER.exception("Shabbat plan tool %s failed", self.name)
+            _LOGGER.exception("Shabbat scheduling tool %s failed", self.name)
             return _fail("Something went wrong. Check the Home Assistant log for details.")
 
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
@@ -492,7 +495,7 @@ class _SchedulerTool(llm.Tool):
 class HowToWritePlanTool(_SchedulerTool):
     name = f"{const.DOMAIN}_how_to_write_a_plan"
     description = (
-        "Read this before writing or changing a Shabbat plan: the rules, the time "
+        "Read this before scheduling anything for Shabbat: the rules, the time "
         "forms, a worked example, and the mistakes that cost a household a Shabbat. "
         "Takes no arguments."
     )
@@ -504,7 +507,7 @@ class HowToWritePlanTool(_SchedulerTool):
 class ListDevicesTool(_SchedulerTool):
     name = f"{const.DOMAIN}_list_devices"
     description = (
-        "List the devices that can be put in a Shabbat plan, with their entity ids. "
+        "List the devices that can be scheduled for Shabbat, with their entity ids. "
         "Use this before writing a plan: a plan needs entity ids like 'light.salon', "
         "never display names."
     )
@@ -619,7 +622,7 @@ class PreviewPlanTool(_SchedulerTool):
 class GetPlanTool(_SchedulerTool):
     name = f"{const.DOMAIN}_get_plan"
     description = (
-        "Read the Shabbat plan that is currently set up. It comes back in the same shape "
+        "Read the Shabbat schedule that is currently set up. It comes back in the same shape "
         f"{const.DOMAIN}_save_plan accepts, so to change one thing: read it, edit the "
         "result, send it back."
     )
@@ -630,7 +633,7 @@ class GetPlanTool(_SchedulerTool):
             return {
                 "ok": True,
                 "exists": False,
-                "note": f"No Shabbat plan yet. {_GUIDE_HINT}",
+                "note": f"Nothing is scheduled for Shabbat yet. {_GUIDE_HINT}",
             }
         plan = plan_from_schedule(schedule)
         return {
@@ -646,7 +649,7 @@ class GetPlanTool(_SchedulerTool):
 class SavePlanTool(_SchedulerTool):
     name = f"{const.DOMAIN}_save_plan"
     description = (
-        "Create or replace the Shabbat plan in a single write. Pass the whole plan - this "
+        "Create or replace the whole Shabbat schedule in a single write. Pass the whole plan - this "
         "replaces whatever was there. Because it is one write, it cannot leave half a "
         "Shabbat defined."
     )
@@ -684,7 +687,7 @@ class AddExceptionTool(_SchedulerTool):
         schedule = _find_plan(hass)
         if not schedule:
             return _fail(
-                "There is no Shabbat plan to add an exception to. Call "
+                "Nothing is scheduled for Shabbat yet, so there is nothing to add an exception to. Call "
                 f"{const.DOMAIN}_save_plan first."
             )
 
@@ -722,7 +725,7 @@ class RemoveExceptionTool(_SchedulerTool):
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
         schedule = _find_plan(hass)
         if not schedule:
-            return _fail("There is no Shabbat plan.")
+            return _fail("Nothing is scheduled for Shabbat.")
 
         plan = plan_from_schedule(schedule)
         remaining = [e for e in plan.exceptions if e.device != args["device"]]
@@ -739,7 +742,7 @@ class RemoveExceptionTool(_SchedulerTool):
 
 class ListSchedulesTool(_SchedulerTool):
     name = f"{const.DOMAIN}_list_schedules"
-    description = "List every scheduler entry, marking which one is the Shabbat plan."
+    description = "List every scheduler entry, marking which one is the Shabbat schedule."
 
     async def async_run(self, hass: HomeAssistant, args: dict[str, Any]) -> JsonObjectType:
         return {

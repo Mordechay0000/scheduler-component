@@ -383,10 +383,10 @@
           "yes": "Yes",
           "no": "No",
           "intro": {
-            "title": "Let's set up your Shabbat",
-            "body": "A few plain questions, and at the end you will have a plan that switches your air conditioners and lights by itself, every week. You can go back at any point, and nothing is saved until the end.",
+            "title": "Let's set up your devices for Shabbat",
+            "body": "A few plain questions, and at the end your air conditioners and lights will switch themselves, every week. You can go back at any point, and nothing is saved until the end.",
             "list_devices": "Pick the devices the plan should look after.",
-            "list_parts": "Break Shabbat into parts - the meal, the night, the morning.",
+            "list_parts": "Divide Shabbat into stretches of time - the meal, the night, the morning.",
             "list_each": "Go through each part on its own: how long it lasts, and what every device does in it.",
             "list_end": "Look at the whole thing before anything is built.",
             "list_title": "What we are about to do"
@@ -422,14 +422,14 @@
             "close": "Going out"
           },
           "review": {
-            "title": "This is your Shabbat",
-            "body": "Read it top to bottom. If something looks wrong, go back and fix it. At the end the plan opens in the editor, and it is only saved when you press Save there.",
+            "title": "This is what your devices will do",
+            "body": "Read it top to bottom. If something looks wrong, go back and fix it. At the end it opens in the editor, and it is only saved when you press Save there.",
             "outside": "{names} falls outside the band and was left out. A Friday-night time has to be after candle lighting, and a Saturday one before havdalah."
           },
           "step_of": "Step {n} of {total}",
           "blocked": "Something above has to change before you can go on.",
           "opening": {
-            "title": "What happens when Shabbat comes in?",
+            "title": "What are the devices doing when Shabbat comes in?",
             "body": "This is the first stretch. Go through the devices and say what each one does the moment Shabbat starts - there is no default here, because one house wants the salon air conditioner on and the next wants it off.",
             "label": "What each device does from candle lighting",
             "at": "Candle lighting this week: {time}",
@@ -456,7 +456,7 @@
             "unknown": "\"{name}\" cannot be placed yet - whatever publishes its time has not said anything. The boundary itself is fine; it will be worked out when the plan runs."
           },
           "parts": {
-            "title": "What parts does your Shabbat have?",
+            "title": "What stretches should Shabbat be divided into?",
             "body": "Think of Shabbat as a few stretches, one after another: the meal, the night, the morning. Devices can be in a different state in each - the salon air conditioner on during the meal and off at night. Here you only pick the parts and what to call them; we will go through them one at a time next.",
             "suggestions": "The usual ones - tap to add",
             "hint": "The order here is the order of the day. Each part starts exactly where the one before it ends, so a gap in the middle is impossible.",
