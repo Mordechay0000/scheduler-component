@@ -17,12 +17,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two Home Assistants, because the integration supports both: pip gives
+        # 3.13 the last release that runs on it, and 3.14 the current one. The
+        # newer one is where Home Assistant lets an integration hand its tools
+        # to Assist; on the older one the standalone API carries them instead,
+        # and only running both proves each path still works.
+        python-version: ['3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies
