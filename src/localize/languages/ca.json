@@ -87,7 +87,8 @@
         "interval": "de {startTime} a {endTime}",
         "at_midnight": "a mitjanit",
         "at_noon": "al migdia",
-        "at_sun_event": "a {sunEvent}"
+        "at_sun_event": "a {sunEvent}",
+        "on_day_of": "at {time} on the day of {anchor}"
       }
     },
     "dialog": {
@@ -281,6 +282,311 @@
           "show_quick_add": {
             "heading": "Quick add row"
           }
+        }
+      },
+      "plan": {
+        "title": "Shabbat plan",
+        "open": "Shabbat plan",
+        "anchor": {
+          "opens": "Candle lighting",
+          "closes": "Havdalah",
+          "fixed": "the same hour every day (not tied to Shabbat)"
+        },
+        "boundary": {
+          "exact": "at the anchor",
+          "offset": "before / after",
+          "clock": "at a clock time that day",
+          "before": "before",
+          "after": "after",
+          "from": "From",
+          "to": "Until",
+          "starts_after": "Starts where \"{name}\" ends.",
+          "starts_open": "Starts when Shabbat comes in.",
+          "pushes": "Moving this moves where \"{name}\" begins: stretches meet, they never overlap and never leave a gap."
+        },
+        "cube": {
+          "welcome": "Kabbalat Shabbat",
+          "night": "Night",
+          "morning": "Morning",
+          "afternoon": "Afternoon",
+          "close": "Motzei Shabbat",
+          "unnamed": "Unnamed",
+          "split": "Split"
+        },
+        "group": {
+          "default": "Shabbat group",
+          "new": "Group {n}",
+          "add": "Add a group",
+          "remove": "Remove this group",
+          "members": "{n} devices",
+          "devices": "Devices in this group"
+        },
+        "detach": {
+          "name": "Exception",
+          "action": "detach",
+          "row": "detached from its group",
+          "rejoin": "Back to the group",
+          "note": "{device} keeps its own hours here. The group leaves it alone until this ends, then takes it back.",
+          "once": "One-off, on",
+          "hint": "Click a device to give it its own hours here.",
+          "once_hint": "Leave empty to repeat every week."
+        },
+        "state": {
+          "label": "State",
+          "on": "On",
+          "off": "Off"
+        },
+        "error": {
+          "no_entities": "\"{group}\" has no devices yet.",
+          "no_anchor": "The plan needs its times from an entity.",
+          "no_anchor_hint": "Enable the Jewish Calendar integration so that {start} and {end} publish a time. Halachic times are not a fixed offset from sunset, so they have to be read at trigger time rather than guessed."
+        },
+        "color": {
+          "label": "Colour",
+          "auto": "Automatic — follows the action"
+        },
+        "help": {
+          "open": "What is this?",
+          "band": "The bar is one Shabbat, from candle lighting to havdalah. It is not a clock: it starts on Friday evening and ends the next night, so the same bar covers a festival that runs for two or three days.",
+          "rows": "Each row is a group of devices that move together. Cutting a stretch in one row changes only that row — nobody else's times move.",
+          "detach": "A device that needs different hours for a while is detached: it gets a row of its own, and while that row is running the group leaves it alone. When it ends the group takes it back, with no further action from you.",
+          "keys": "Click a stretch to edit it. Drag the line between two stretches to move the boundary. + splits a stretch in two; Delete removes the selected one.",
+          "cube": "A stretch is a piece of the bar: a start, an end, and a list of devices. What it says here happens the moment it begins and stays that way until the next stretch takes over. Split it to make two out of one, or drag the line between two stretches to move where they meet.",
+          "devices": "Every device of the group gets its own row, so one stretch can run the salon air conditioner and leave the bedrooms off. Three choices per device: on, off, or not in this stretch at all. The third is a real choice, not a shade of off — the stretch never touches that device, so it keeps whatever it had, is not held to anything, is not retried if a call fails, and any other schedule is free to drive it.",
+          "group": "A group is a set of devices that move together: they share one row of stretches. A device added here appears in every stretch of the row, and can still be taken out of any single one, or given hours of its own with \"detach\".",
+          "book": "The device book is where you name things once and group them once — it is yours to edit here: add a device, call it what you actually call it, say what it really is, tick it into groups, or take it out again. It does not fill itself from your plan; nothing is in it unless you put it there. Names are saved as Home Assistant aliases and groups as labels, so both work everywhere in Home Assistant rather than only here. The kind is the scheduler's own: correct it when a device is registered under the wrong domain — an air conditioner wired behind a plain switch — so this editor offers it degrees instead of brightness.",
+          "book_groups": "One click adds every device of that group. Groups come from the device book, so this is the quick way in: name your rooms once, and pick them by name forever after.",
+          "book_devices": "The devices your book knows, under the names you gave them. Click to add or remove. If something is missing it simply has not been named yet — open the device book from Settings, or pick the entity by hand.",
+          "report": "The plan read back as what will actually happen, in order, with every device named. The times are worked out from this week’s candle lighting and havdalah, so it is the real thing rather than a sketch. Worth reading before saving; it opens again straight afterwards.",
+          "colours": "Plain paints a stretch by what it does: green for on, grey for off, and striped when the devices inside it disagree. Following the action tints it with the colour the bulb will really show, which is prettier and much harder to read at a glance.",
+          "times": "The times this household keeps. A new plan starts from these, so they are set once here instead of typed into every wizard. Changing them never touches a plan already built.",
+          "opening": "Every device is asked separately, because there is no “what happens at candle lighting” that is right for every house. Three answers each: on, off, or “not in this part” - the plan does not touch it during that time and it stays as it is. You cannot move on until every device has an answer, so nothing is decided for you.",
+          "hold": "With holding on, a device moved during the plan is put back — a wall switch pressed out of habit, or an automation that does not know it is Shabbat. It waits 30 seconds between attempts, so it can never end up fighting whatever moved it. With holding off, the plan sets each device at the boundary and then leaves it alone.",
+          "step_intro": "The wizard builds a whole plan and hands it to the editor. It writes nothing to Home Assistant on the way - only at the end, when you press Save there. You can leave at any point and build by hand instead.",
+          "step_devices": "Pick from your book first - those are the names you actually use. The entity picker below is for something the book has never heard of. Only things that can be switched on and off are offered.",
+          "step_opening": "The first stretch starts exactly at candle lighting, so there is nothing to say about when. You only say what state the plan starts from.",
+          "step_hold": "One choice for the whole plan. Any single part can still be changed on its own in the editor afterwards.",
+          "step_review": "Read it top to bottom. Everything here can be edited afterwards, and nothing is saved until you press Save in the editor.",
+          "step_parts": "No times and no devices here, on purpose - just the names of the parts. After this step each part gets a screen of its own, where you say how long it lasts and what happens in it. You can add a part of your own and call it whatever you like.",
+          "step_part": "One screen, one part. The time you set here is its end - its start was already decided by the part before it, so gaps and overlaps cannot happen.",
+          "part_until": "Three ways to say when a part ends: a fixed clock time (23:00 - never moves all year), a distance from sunset (an hour and a half after it), or a distance from havdalah (half an hour before). The last two move through the year together with Shabbat itself, which is usually what you actually meant. A fixed time close to the edge can fall outside Shabbat in another season, and the wizard says so right here.",
+          "part_what": "A device you do not touch here carries on exactly as it was in the part before, so change only what differs: the salon air conditioner at 16 degrees, one light at 50% and another at 10%. “Not in this part” means the plan leaves it alone during this time - it will not even put it back if somebody switches it off."
+        },
+        "wizard": {
+          "open": "Guided setup",
+          "offer": "New here? A few questions will build a working plan, and you can keep editing it afterwards.",
+          "offer_yes": "Take me through it",
+          "offer_no": "I'll do it myself",
+          "back": "Back",
+          "next": "Next",
+          "finish": "Build the plan",
+          "yes": "Yes",
+          "no": "No",
+          "intro": {
+            "title": "Let's set up your devices for Shabbat",
+            "body": "A few plain questions, and at the end your air conditioners and lights will switch themselves, every week. You can go back at any point, and nothing is saved until the end.",
+            "list_devices": "Pick the devices the plan should look after.",
+            "list_parts": "Divide Shabbat into stretches of time - the meal, the night, the morning.",
+            "list_each": "Go through each part on its own: how long it lasts, and what every device does in it.",
+            "list_end": "Look at the whole thing before anything is built.",
+            "list_title": "What we are about to do"
+          },
+          "devices": {
+            "title": "Which devices should the plan control?",
+            "body": "Tick the air conditioners and lights you want it to look after. Anything you leave out is not touched at all.",
+            "groups": "Groups from your book",
+            "book": "Devices from your book",
+            "no_book": "Your book is empty. Open Settings → Device book to name what you have, or pick an entity by hand below.",
+            "advanced": "Pick an entity by hand",
+            "simple": "Back to the book",
+            "advanced_hint": "Every entity Home Assistant knows, by its raw id. Anything picked here is worth naming in the device book afterwards.",
+            "chosen": "{n} chosen.",
+            "none": "Nothing chosen yet — pick at least one to go on."
+          },
+          "moments": {
+            "add": "Add a moment",
+            "name": "Name it"
+          },
+          "when": {
+            "clock": "at a clock time",
+            "sunset": "from sunset",
+            "end": "from havdalah",
+            "hint": "How this moment says when it ends. A clock time is fixed all year; the other two move with the sun."
+          },
+          "preset": {
+            "meal_eve": "Friday night dinner",
+            "sleep": "Bedtime",
+            "morning": "Morning",
+            "meal_day": "Shabbat lunch",
+            "nap": "Afternoon nap",
+            "close": "Going out"
+          },
+          "review": {
+            "title": "This is what your devices will do",
+            "body": "Read it top to bottom. If something looks wrong, go back and fix it. At the end it opens in the editor, and it is only saved when you press Save there.",
+            "outside": "{names} falls outside the band and was left out. A Friday-night time has to be after candle lighting, and a Saturday one before havdalah."
+          },
+          "step_of": "Step {n} of {total}",
+          "blocked": "Something above has to change before you can go on.",
+          "opening": {
+            "title": "What are the devices doing when Shabbat comes in?",
+            "body": "This is the first stretch. Go through the devices and say what each one does the moment Shabbat starts - there is no default here, because one house wants the salon air conditioner on and the next wants it off.",
+            "label": "What each device does from candle lighting",
+            "at": "Candle lighting this week: {time}",
+            "until": "It lasts until “{name}”.",
+            "waiting": "{n} devices have not been answered for yet. Give each one on, off, or “not in this part”."
+          },
+          "hold": {
+            "title": "And if somebody moves a device in the middle?",
+            "body": "If a wall switch gets pressed out of habit, or another automation moves something without knowing it is Shabbat, holding the state puts it back where the plan wanted it instead of leaving it wrong until morning. For a Shabbat plan you usually want this on."
+          },
+          "caution": {
+            "outside": "This lands at {time}, outside Shabbat — the stretch would never run.",
+            "tight": "{time} is close to the edge of the band. On another Shabbat it can fall outside it.",
+            "hard": "{time} is a fixed clock time: it does not move with the sun, so it can land differently another week.",
+            "unknown": "This time cannot be worked out yet.",
+            "estimate": "This works out to about {time}. The exact sunset is read on the day, so it can land a few minutes either side of that."
+          },
+          "problem": {
+            "no_time": "\"{name}\" has no time yet.",
+            "outside": "\"{name}\" lands at {time}, outside this Shabbat. Move it inside the band, or measure it from sunset or from havdalah instead of the clock.",
+            "collide": "{names} land on the same minute. Two moments at the same time would leave nothing in between them — move one.",
+            "hard": "{names} use a fixed clock time. It works this Shabbat, but candle lighting and havdalah move by more than an hour across the year, so on another Shabbat the same reading can fall outside the band. Nothing breaks when that happens: the stretch simply does not run, and the one before it carries on, with the same devices in the same state, until the next boundary that does land. Measuring from sunset or from havdalah avoids it entirely.",
+            "tight": "\"{name}\" is only {hours} hours from the edge of the band. It works tonight, but it is the first one that will fall outside on a Shabbat that comes in later.",
+            "unknown": "\"{name}\" cannot be placed yet - whatever publishes its time has not said anything. The boundary itself is fine; it will be worked out when the plan runs."
+          },
+          "parts": {
+            "title": "What stretches should Shabbat be divided into?",
+            "body": "Think of Shabbat as a few stretches, one after another: the meal, the night, the morning. Devices can be in a different state in each - the salon air conditioner on during the meal and off at night. Here you only pick the parts and what to call them; we will go through them one at a time next.",
+            "suggestions": "The usual ones - tap to add",
+            "hint": "The order here is the order of the day. Each part starts exactly where the one before it ends, so a gap in the middle is impossible.",
+            "empty": "No parts yet. That is fine too - the devices then stay all Shabbat as you set them in the next step."
+          },
+          "part": {
+            "body": "This part starts exactly where the one before it ended, so two questions are left: how long it lasts, and what changes about the devices.",
+            "untitled": "Unnamed part",
+            "starts": "Starts at {time}",
+            "until": "How long does this part last?",
+            "ends_at": "That is {time} this Shabbat.",
+            "ends_unknown": "This time cannot be worked out yet.",
+            "what": "What are the devices doing in this part?",
+            "all_on": "All on",
+            "all_off": "All off",
+            "bulk": "Set them all at once:",
+            "carried": "carries on from the part before",
+            "undecided": "not chosen yet"
+          }
+        },
+        "override": {
+          "label": "Devices in this stretch",
+          "hint": "Each device can do its own thing here, with its own settings — the salon air conditioner on at 16° while the bedrooms are off. A device with nothing set of its own simply follows the stretch.",
+          "flip": "make this one differ here",
+          "back": "follow the stretch",
+          "follows": "follows the stretch"
+        },
+        "light": {
+          "brightness": "Brightness",
+          "warmth": "Colour",
+          "set": "set",
+          "clear": "leave as is",
+          "warm": "warm",
+          "neutral": "neutral",
+          "cool": "daylight"
+        },
+        "enforce": {
+          "label": "Hold this state",
+          "beta": "experimental",
+          "on": "Hold",
+          "off": "Don't hold",
+          "hint": "If a wall switch or another integration changes a device during this stretch, put it back. Waits 30 seconds between attempts so it cannot end up fighting whatever moved it."
+        },
+        "history": {
+          "undo": "Undo",
+          "redo": "Redo"
+        },
+        "keys": {
+          "open": "Keyboard shortcuts",
+          "select": "previous / next stretch",
+          "row": "previous / next row",
+          "move_start": "move its start by 5 minutes",
+          "move_stop": "move its end by 5 minutes",
+          "state": "on / off",
+          "colour": "colour, 0 for automatic",
+          "rename": "rename it"
+        },
+        "report": {
+          "open": "What will happen",
+          "title": "What will happen",
+          "own": "its own",
+          "taken": "until \"{name}\"",
+          "saved": "Saved. This is what it will do."
+        },
+        "climate": {
+          "degrees": "Temperature"
+        },
+        "book": {
+          "open": "Device book",
+          "title": "Device book",
+          "hint": "Your own names and groupings — kept in Home Assistant, so they work outside the scheduler too.",
+          "new_group": "Name a new group…",
+          "use": "add to this group",
+          "name_it": "call it…",
+          "groups": "Groups",
+          "no_groups": "No groups yet. A group is a set of devices you pick by one name — “the air conditioners”, “the bedrooms”.",
+          "groups_hint": "A new group is empty until you tick a device into it below.",
+          "add_group": "add",
+          "devices": "Devices in your book",
+          "no_devices": "Your book is empty. Add a device below and give it the name you actually use for it.",
+          "add": "Add a device",
+          "add_hint": "Only things that can be switched on and off are offered. It starts with the name Home Assistant gives it, which you can then change.",
+          "remove": "take out of the book",
+          "kind": {
+            "light": "light",
+            "switch": "switch",
+            "climate": "air conditioner / heater",
+            "cover": "cover",
+            "fan": "fan",
+            "media_player": "media player",
+            "other": "something else"
+          }
+        },
+        "device": {
+          "all": "All devices",
+          "all_hint": "A shortcut: sets every device of this group in this part. Each can still be changed on its own below.",
+          "untouched": "Not in this part",
+          "untouched_hint": "This part does not act on it: it keeps whatever it had, is not held to anything, is not retried, and any other schedule may drive it."
+        },
+        "settings": {
+          "open": "Settings",
+          "title": "Settings",
+          "hint": "Preferences, and the device book.",
+          "colours": "Colours",
+          "colours_plain": "Plain on / off",
+          "colours_action": "Follow the action",
+          "colours_hint": "Plain makes on and off unmistakable at a glance. Following the action tints a stretch with the colour the bulb will actually show.",
+          "times": "Default times",
+          "times_hint": "What the wizard offers when you add one of these moments. Plans you have already built keep the times they were built with.",
+          "times_reset": "Back to the suggested times"
+        },
+        "check": {
+          "refused": "The plan was not saved:",
+          "and_more": "And {n} more.",
+          "empty_group": "The group “{group}” has no devices in it.",
+          "unknown_device": "“{device}” no longer exists in Home Assistant.",
+          "not_a_device": "“{device}” cannot be switched on and off, so a schedule has nothing to tell it.",
+          "two_groups": "“{device}” is in both “{a}” and “{b}”. A device belongs to one group.",
+          "stranger": "The part “{where}” sets “{device}”, which is not in the group “{group}”.",
+          "no_action": "The part “{where}” has no usable action for “{device}”.",
+          "parameter": "In “{where}”, {value} for “{device}” is outside the allowed range ({low}–{high}).",
+          "gap": "There is a gap between “{where}” and “{next}”. Each part has to start exactly where the one before it ended.",
+          "backwards": "“{where}” ends before it starts."
+        },
+        "row": {
+          "paused": "paused",
+          "band": "From {from} to {to}",
+          "summary": "{parts} parts · {devices} devices",
+          "now": "Now: {name}",
+          "next": "Next: {name} · {time}"
         }
       }
     }
